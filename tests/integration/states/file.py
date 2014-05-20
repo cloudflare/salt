@@ -1,19 +1,32 @@
+# -*- coding: utf-8 -*-
+
 '''
 Tests for the file state
 '''
 
 # Import python libs
 import os
+import glob
 import shutil
-import tempfile
+import pwd
+import grp
 
 # Import Salt Testing libs
-from salttesting.helpers import ensure_in_syspath
+from salttesting import skipIf
+from salttesting.helpers import (
+    destructiveTest,
+    ensure_in_syspath,
+    with_system_user_and_group
+)
 ensure_in_syspath('../../')
+
 
 # Import salt libs
 import integration
 import salt.utils
+
+# Import Python libs
+import stat
 
 
 class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
@@ -109,6 +122,31 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         self.assertEqual(master_data, minion_data)
         self.assertSaltTrueReturn(ret)
 
+    def test_managed_dir_mode(self):
+        '''
+        Tests to ensure that file.managed creates directories with the
+        permissions requested with the dir_mode argument
+        '''
+        desired_mode = 511  # 0777 in octal
+        name = os.path.join(integration.TMP, 'a', 'managed_dir_mode_test_file')
+        desired_owner = 'nobody'
+        ret = self.run_state(
+            'file.managed',
+            name=name,
+            source='salt://grail/scene33',
+            mode=600,
+            makedirs=True,
+            user=desired_owner,
+            dir_mode=oct(desired_mode)  # 0777
+        )
+        resulting_mode = stat.S_IMODE(
+            os.stat(os.path.join(integration.TMP, 'a')).st_mode
+        )
+        resulting_owner = pwd.getpwuid(os.stat(os.path.join(integration.TMP, 'a')).st_uid).pw_name
+        self.assertEqual(oct(desired_mode), oct(resulting_mode))
+        self.assertSaltTrueReturn(ret)
+        self.assertEqual(desired_owner, resulting_owner)
+
     def test_test_managed(self):
         '''
         file.managed test interface
@@ -134,7 +172,7 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         )
 
         changes = ret.values()[0]['changes']
-        self.assertEquals('<show_diff=False>', changes['diff'])
+        self.assertEqual('<show_diff=False>', changes['diff'])
 
     def test_directory(self):
         '''
@@ -267,6 +305,34 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             if os.path.isdir(name):
                 shutil.rmtree(name, ignore_errors=True)
 
+    def test_recurse_specific_env(self):
+        '''
+        file.recurse passing __env__
+        '''
+        name = os.path.join(integration.TMP, 'recurse_dir_prod_env')
+        ret = self.run_state('file.recurse',
+                             name=name,
+                             source='salt://holy',
+                             __env__='prod')
+        try:
+            self.assertSaltTrueReturn(ret)
+            self.assertTrue(os.path.isfile(os.path.join(name, '32', 'scene')))
+        finally:
+            if os.path.isdir(name):
+                shutil.rmtree(name, ignore_errors=True)
+
+        name = os.path.join(integration.TMP, 'recurse_dir_prod_env')
+        ret = self.run_state('file.recurse',
+                             name=name,
+                             source='salt://holy',
+                             saltenv='prod')
+        try:
+            self.assertSaltTrueReturn(ret)
+            self.assertTrue(os.path.isfile(os.path.join(name, '32', 'scene')))
+        finally:
+            if os.path.isdir(name):
+                shutil.rmtree(name, ignore_errors=True)
+
     def test_test_recurse(self):
         '''
         file.recurse test interface
@@ -277,6 +343,32 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
         )
         self.assertSaltNoneReturn(ret)
         self.assertFalse(os.path.isfile(os.path.join(name, '36', 'scene')))
+        self.assertFalse(os.path.exists(name))
+
+    def test_test_recurse_specific_env(self):
+        '''
+        file.recurse test interface
+        '''
+        name = os.path.join(integration.TMP, 'recurse_test_dir_prod_env')
+        ret = self.run_state('file.recurse',
+                             test=True,
+                             name=name,
+                             source='salt://holy',
+                             __env__='prod'
+        )
+        self.assertSaltNoneReturn(ret)
+        self.assertFalse(os.path.isfile(os.path.join(name, '32', 'scene')))
+        self.assertFalse(os.path.exists(name))
+
+        name = os.path.join(integration.TMP, 'recurse_test_dir_prod_env')
+        ret = self.run_state('file.recurse',
+                             test=True,
+                             name=name,
+                             source='salt://holy',
+                             saltenv='prod'
+        )
+        self.assertSaltNoneReturn(ret)
+        self.assertFalse(os.path.isfile(os.path.join(name, '32', 'scene')))
         self.assertFalse(os.path.exists(name))
 
     def test_recurse_template(self):
@@ -317,6 +409,32 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             self.assertFalse(os.path.exists(strayfile))
             self.assertTrue(os.path.isfile(os.path.join(name, '36', 'scene')))
             self.assertTrue(os.path.isfile(os.path.join(name, 'scene33')))
+        finally:
+            shutil.rmtree(name, ignore_errors=True)
+
+    def test_recurse_clean_specific_env(self):
+        '''
+        file.recurse with clean=True and __env__=prod
+        '''
+        name = os.path.join(integration.TMP, 'recurse_clean_dir_prod_env')
+        if not os.path.isdir(name):
+            os.makedirs(name)
+        strayfile = os.path.join(name, 'strayfile')
+        salt.utils.fopen(strayfile, 'w').close()
+
+        # Corner cases: replacing file with a directory and vice versa
+        salt.utils.fopen(os.path.join(name, '32'), 'w').close()
+        os.makedirs(os.path.join(name, 'scene34'))
+        ret = self.run_state('file.recurse',
+                             name=name,
+                             source='salt://holy',
+                             clean=True,
+                             __env__='prod')
+        try:
+            self.assertSaltTrueReturn(ret)
+            self.assertFalse(os.path.exists(strayfile))
+            self.assertTrue(os.path.isfile(os.path.join(name, '32', 'scene')))
+            self.assertTrue(os.path.isfile(os.path.join(name, 'scene34')))
         finally:
             shutil.rmtree(name, ignore_errors=True)
 
@@ -749,6 +867,313 @@ class FileTest(integration.ModuleCase, integration.SaltReturnAssertsMixIn):
             if os.path.isdir(testcase_temp_dir):
                 shutil.rmtree(testcase_temp_dir)
 
+    def test_issue_8343_accumulated_require_in(self):
+        template_path = os.path.join(integration.TMP_STATE_TREE, 'issue-8343.sls')
+        testcase_filedest = os.path.join(integration.TMP, 'issue-8343.txt')
+        sls_template = [
+            '{0}:',
+            '  file.managed:',
+            '    - contents: |',
+            '                #',
+            '',
+            'prepend-foo-accumulator-from-pillar:',
+            '  file.accumulated:',
+            '    - require_in:',
+            '      - file: prepend-foo-management',
+            '    - filename: {0}',
+            '    - text: |',
+            '            foo',
+            '',
+            'append-foo-accumulator-from-pillar:',
+            '  file.accumulated:',
+            '    - require_in:',
+            '      - file: append-foo-management',
+            '    - filename: {0}',
+            '    - text: |',
+            '            bar',
+            '',
+            'prepend-foo-management:',
+            '  file.blockreplace:',
+            '    - name: {0}',
+            '    - marker_start: "#-- start salt managed zonestart -- PLEASE, DO NOT EDIT"',
+            '    - marker_end: "#-- end salt managed zonestart --"',
+            "    - content: ''",
+            '    - prepend_if_not_found: True',
+            "    - backup: '.bak'",
+            '    - show_changes: True',
+            '',
+            'append-foo-management:',
+            '  file.blockreplace:',
+            '    - name: {0}',
+            '    - marker_start: "#-- start salt managed zoneend -- PLEASE, DO NOT EDIT"',
+            '    - marker_end: "#-- end salt managed zoneend --"',
+            "    - content: ''",
+            '    - append_if_not_found: True',
+            "    - backup: '.bak2'",
+            '    - show_changes: True',
+            '']
+        open(template_path, 'w').write(
+                '\n'.join(sls_template).format(testcase_filedest))
+        try:
+            ret = self.run_function('state.sls', mods='issue-8343')
+            for name, step in ret.items():
+                self.assertSaltTrueReturn({name: step})
+            self.assertEqual(
+                ['#-- start salt managed zonestart -- PLEASE, DO NOT EDIT',
+                 'foo',
+                 '',
+                 '#-- end salt managed zonestart --',
+                 '#',
+                 '#-- start salt managed zoneend -- PLEASE, DO NOT EDIT',
+                 'bar',
+                 '',
+                 '#-- end salt managed zoneend --',
+                 ''],
+                open(testcase_filedest).read().split('\n')
+            )
+        finally:
+            if os.path.isdir(testcase_filedest):
+                os.unlink(testcase_filedest)
+            for filename in glob.glob('{0}.bak*'.format(testcase_filedest)):
+                os.unlink(filename)
+
+    def test_issue_8947_utf8_sls(self):
+        '''
+        Test some file operation with utf-8 chararacters on the sls
+
+        This is more generic than just a file test. Feel free to move
+        '''
+        # Get a path to the temporary file
+        # 한국어 시험 (korean)
+        # '\xed\x95\x9c\xea\xb5\xad\xec\x96\xb4 \xec\x8b\x9c\xed\x97\x98' (utf-8)
+        # u'\ud55c\uad6d\uc5b4 \uc2dc\ud5d8' (unicode)
+        korean_1 = '한국어 시험'
+        korean_utf8_1 = ('\xed\x95\x9c\xea\xb5\xad\xec\x96\xb4'
+                         ' \xec\x8b\x9c\xed\x97\x98')
+        korean_unicode_1 = u'\ud55c\uad6d\uc5b4 \uc2dc\ud5d8'
+        korean_2 = '첫 번째 행'
+        korean_utf8_2 = '\xec\xb2\xab \xeb\xb2\x88\xec\xa7\xb8 \xed\x96\x89'
+        korean_unicode_2 = u'\uccab \ubc88\uc9f8 \ud589'
+        korean_3 = '마지막 행'
+        korean_utf8_3 = '\xeb\xa7\x88\xec\xa7\x80\xeb\xa7\x89 \xed\x96\x89'
+        korean_unicode_3 = u'\ub9c8\uc9c0\ub9c9 \ud589'
+        test_file = os.path.join(integration.TMP,
+                                 'salt_utf8_tests/'+korean_utf8_1+'.txt'
+        )
+        template_path = os.path.join(integration.TMP_STATE_TREE, 'issue-8947.sls')
+        # create the sls template
+        template_lines = [
+            '# -*- coding: utf-8 -*-',
+            'some-utf8-file-create:',
+            '  file.managed:',
+            "    - name: '{0}'".format(test_file),
+            "    - contents: {0}".format(korean_utf8_1),
+            '    - makedirs: True',
+            '    - replace: True',
+            '    - show_diff: True',
+            'some-utf8-file-create2:',
+            '  file.managed:',
+            "    - name: '{0}'".format(test_file),
+            '    - contents: |',
+            '       {0}'.format(korean_utf8_2),
+            '       {0}'.format(korean_utf8_1),
+            '       {0}'.format(korean_utf8_3),
+            '    - replace: True',
+            '    - show_diff: True',
+            'some-utf8-file-exists:',
+            '  file.exists:',
+            "    - name: '{0}'".format(test_file),
+            '    - require:',
+            '      - file: some-utf8-file-create2',
+            'some-utf8-file-content-test:',
+            '  cmd.run:',
+            '    - name: \'cat "{0}"\''.format(test_file),
+            '    - require:',
+            '      - file: some-utf8-file-exists',
+            'some-utf8-file-content-remove:',
+            '  cmd.run:',
+            '    - name: \'rm -f "{0}"\''.format(test_file),
+            '    - require:',
+            '      - cmd: some-utf8-file-content-test',
+            'some-utf8-file-removed:',
+            '  file.missing:',
+            "    - name: '{0}'".format(test_file),
+            '    - require:',
+            '      - cmd: some-utf8-file-content-remove',
+        ]
+        open(template_path, 'w').write(
+                '\n'.join(template_lines))
+        try:
+            ret = self.run_function('state.sls', mods='issue-8947')
+            if not isinstance(ret, dict):
+                raise AssertionError(
+                    ('Something went really wrong while testing this sls:'
+                    ' {0}').format(repr(ret))
+                )
+            # using unicode.encode('utf-8') we should get the same as
+            # an utf-8 string
+            expected = {
+                ('file_|-some-utf8-file-create_|-{0}'
+                '_|-managed').format(test_file): {
+                    'name': '{0}'.format(test_file),
+                    '__run_num__': 0,
+                    'comment': 'File {0} updated'.format(test_file),
+                    'diff': 'New file'
+                },
+                ('file_|-some-utf8-file-create2_|-{0}'
+                '_|-managed').format(test_file): {
+                    'name': '{0}'.format(test_file),
+                    '__run_num__': 1,
+                    'comment': 'File {0} updated'.format(test_file),
+                    'diff': 'Replace binary file with text file'
+                },
+                ('file_|-some-utf8-file-exists_|-{0}'
+                '_|-exists').format(test_file): {
+                    'name': '{0}'.format(test_file),
+                    '__run_num__': 2,
+                    'comment': 'Path {0} exists'.format(test_file)
+                },
+                ('cmd_|-some-utf8-file-content-test_|-cat "{0}"'
+                 '_|-run').format(test_file): {
+                    'name': 'cat "{0}"'.format(test_file),
+                    '__run_num__': 3,
+                    'comment': 'Command "cat "{0}"" run'.format(test_file),
+                    'stdout': '{0}\n{1}\n{2}'.format(
+                        korean_unicode_2.encode('utf-8'),
+                        korean_unicode_1.encode('utf-8'),
+                        korean_unicode_3.encode('utf-8')
+                    )
+                },
+                ('cmd_|-some-utf8-file-content-remove_|-rm -f "{0}"'
+                 '_|-run').format(test_file): {
+                    'name': 'rm -f "{0}"'.format(test_file),
+                    '__run_num__': 4,
+                    'comment': 'Command "rm -f "{0}"" run'.format(test_file),
+                    'stdout': ''
+                },
+                ('file_|-some-utf8-file-removed_|-{0}'
+                '_|-missing').format(test_file): {
+                    'name': '{0}'.format(test_file),
+                    '__run_num__': 5,
+                    'comment':
+                          'Path {0} is missing'.format(test_file),
+                }
+            }
+            result = {}
+            for name, step in ret.items():
+                self.assertSaltTrueReturn({name: step})
+                result.update({
+                 name: {
+                    'name': step['name'],
+                    '__run_num__': step['__run_num__'],
+                    'comment': step['comment']
+                }})
+                if 'diff' in step['changes']:
+                    result[name]['diff'] = step['changes']['diff']
+                if 'stdout' in step['changes']:
+                    result[name]['stdout'] = step['changes']['stdout']
+
+            self.maxDiff = None
+
+            self.assertEqual(expected, result)
+            cat_id = ('cmd_|-some-utf8-file-content-test_|-cat "{0}"'
+                      '_|-run').format(test_file)
+            self.assertEqual(
+                result[cat_id]['stdout'],
+                korean_2 + '\n' + korean_1 + '\n' + korean_3
+            )
+        finally:
+            if os.path.isdir(test_file):
+                os.unlink(test_file)
+                os.unlink(template_path)
+
+    @destructiveTest
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
+    @with_system_user_and_group('user12209', 'group12209',
+                                on_existing='delete', delete=True)
+    def test_issue_12209_follow_symlinks(self, user, group):
+        '''
+        Ensure that symlinks are properly chowned when recursing (following
+        symlinks)
+        '''
+        tmp_dir = os.path.join(integration.TMP, 'test.12209')
+
+        # Cleanup the path if it already exists
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir)
+        elif os.path.isfile(tmp_dir):
+            os.remove(tmp_dir)
+
+        # Make the directories for this test
+        onedir = os.path.join(tmp_dir, 'one')
+        twodir = os.path.join(tmp_dir, 'two')
+        os.makedirs(onedir)
+        os.symlink(onedir, twodir)
+
+        try:
+            # Run the state
+            ret = self.run_state(
+                'file.directory', name=tmp_dir, follow_symlinks=True,
+                user=user, group=group, recurse=['user', 'group']
+            )
+            self.assertSaltTrueReturn(ret)
+
+            # Double-check, in case state mis-reported a True result. Since we are
+            # following symlinks, we expect twodir to still be owned by root, but
+            # onedir should be owned by the 'issue12209' user.
+            onestats = os.stat(onedir)
+            twostats = os.lstat(twodir)
+            self.assertEqual(pwd.getpwuid(onestats.st_uid).pw_name, user)
+            self.assertEqual(pwd.getpwuid(twostats.st_uid).pw_name, 'root')
+            self.assertEqual(grp.getgrgid(onestats.st_gid).gr_name, group)
+            self.assertEqual(grp.getgrgid(twostats.st_gid).gr_name, 'root')
+        finally:
+            if os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
+
+    @destructiveTest
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
+    @with_system_user_and_group('user12209', 'group12209',
+                                on_existing='delete', delete=True)
+    def test_issue_12209_no_follow_symlinks(self, user, group):
+        '''
+        Ensure that symlinks are properly chowned when recursing (not following
+        symlinks)
+        '''
+        tmp_dir = os.path.join(integration.TMP, 'test.12209')
+
+        # Cleanup the path if it already exists
+        if os.path.isdir(tmp_dir):
+            shutil.rmtree(tmp_dir)
+        elif os.path.isfile(tmp_dir):
+            os.remove(tmp_dir)
+
+        # Make the directories for this test
+        onedir = os.path.join(tmp_dir, 'one')
+        twodir = os.path.join(tmp_dir, 'two')
+        os.makedirs(onedir)
+        os.symlink(onedir, twodir)
+
+        try:
+            # Run the state
+            ret = self.run_state(
+                'file.directory', name=tmp_dir, follow_symlinks=False,
+                user=user, group=group, recurse=['user', 'group']
+            )
+            self.assertSaltTrueReturn(ret)
+
+            # Double-check, in case state mis-reported a True result. Since we
+            # are not following symlinks, we expect twodir to now be owned by
+            # the 'issue12209' user, just link onedir.
+            onestats = os.stat(onedir)
+            twostats = os.lstat(twodir)
+            self.assertEqual(pwd.getpwuid(onestats.st_uid).pw_name, user)
+            self.assertEqual(pwd.getpwuid(twostats.st_uid).pw_name, user)
+            self.assertEqual(grp.getgrgid(onestats.st_gid).gr_name, group)
+            self.assertEqual(grp.getgrgid(twostats.st_gid).gr_name, group)
+        finally:
+            if os.path.isdir(tmp_dir):
+                shutil.rmtree(tmp_dir)
 
 if __name__ == '__main__':
     from integration import run_tests

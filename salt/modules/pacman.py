@@ -11,15 +11,21 @@ import re
 
 # Import salt libs
 import salt.utils
+from salt.exceptions import CommandExecutionError, MinionError
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pkg'
 
 
 def __virtual__():
     '''
     Set the virtual pkg module if the os is Arch
     '''
-    return 'pkg' if __grains__['os'] in ('Arch', 'Arch ARM') else False
+    if __grains__['os'] in ('Arch', 'Arch ARM'):
+        return __virtualname__
+    return False
 
 
 def _list_removed(old, new):
@@ -60,7 +66,8 @@ def latest_version(*names, **kwargs):
         ret[name] = ''
     cmd = 'pacman -Sp --needed --print-format "%n %v" ' \
           '{0}'.format(' '.join(names))
-    for line in __salt__['cmd.run_stdout'](cmd).splitlines():
+    out = __salt__['cmd.run_stdout'](cmd, output_loglevel='debug')
+    for line in out.splitlines():
         try:
             name, version_num = line.split()
             # Only add to return dict if package is in the list of packages
@@ -71,6 +78,14 @@ def latest_version(*names, **kwargs):
         except (ValueError, IndexError):
             pass
 
+    pkgs = {}
+
+    for name in names:
+        if not ret[name]:
+            if not pkgs:
+                pkgs = list_pkgs()
+            if name in pkgs:
+                ret[name] = pkgs[name]
     # Return a string if only one package name passed
     if len(names) == 1:
         return ret[names[0]]
@@ -104,10 +119,11 @@ def list_upgrades():
         salt '*' pkg.list_upgrades
     '''
     upgrades = {}
-    lines = __salt__['cmd.run'](
-        'pacman -Sypu --print-format "%n %v" | egrep -v ' r'"^\s|^:"'
-    ).splitlines()
-    for line in lines:
+    out = __salt__['cmd.run'](
+        'pacman -Sypu --print-format "%n %v" | egrep -v ' r'"^\s|^:"',
+        output_loglevel='debug'
+    )
+    for line in out.splitlines():
         comps = line.split(' ')
         if len(comps) < 2:
             continue
@@ -144,8 +160,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
@@ -158,8 +175,8 @@ def list_pkgs(versions_as_list=False, **kwargs):
 
     cmd = 'pacman -Q'
     ret = {}
-    out = __salt__['cmd.run'](cmd).splitlines()
-    for line in out:
+    out = __salt__['cmd.run'](cmd, output_loglevel='debug')
+    for line in out.splitlines():
         if not line:
             continue
         try:
@@ -191,8 +208,8 @@ def refresh_db():
     '''
     cmd = 'LANG=C pacman -Sy'
     ret = {}
-    out = __salt__['cmd.run'](cmd).splitlines()
-    for line in out:
+    out = __salt__['cmd.run'](cmd, output_loglevel='debug')
+    for line in out.splitlines():
         if line.strip().startswith('::'):
             continue
         if not line:
@@ -265,10 +282,13 @@ def install(name=None,
         {'<package>': {'old': '<old-version>',
                        'new': '<new-version>'}}
     '''
-    pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
-                                                                  pkgs,
-                                                                  sources,
-                                                                  **kwargs)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs, sources, **kwargs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
+
     if pkg_params is None or len(pkg_params) == 0:
         return {}
 
@@ -309,18 +329,20 @@ def install(name=None,
                 log.error(problem)
             return {}
 
+        # It is critical that -Syu is run instead of -Sy:
+        # http://gist.io/5660494
         if salt.utils.is_true(refresh):
-            cmd = 'pacman -Syu --noprogressbar --noconfirm ' \
+            cmd = 'pacman -Syu --noprogressbar --noconfirm --needed ' \
                   '"{0}"'.format('" "'.join(targets))
         else:
-            cmd = 'pacman -S --noprogressbar --noconfirm ' \
+            cmd = 'pacman -S --noprogressbar --noconfirm --needed ' \
                   '"{0}"'.format('" "'.join(targets))
 
     old = list_pkgs()
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def upgrade():
@@ -340,10 +362,10 @@ def upgrade():
     '''
     old = list_pkgs()
     cmd = 'pacman -Syu --noprogressbar --noconfirm'
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def _uninstall(action='remove', name=None, pkgs=None, **kwargs):
@@ -351,7 +373,11 @@ def _uninstall(action='remove', name=None, pkgs=None, **kwargs):
     remove and purge do identical things but with different pacman commands,
     this function performs the common logic.
     '''
-    pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    try:
+        pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
+
     old = list_pkgs()
     targets = [x for x in pkg_params if x in old]
     if not targets:
@@ -359,10 +385,10 @@ def _uninstall(action='remove', name=None, pkgs=None, **kwargs):
     remove_arg = '-Rsc' if action == 'purge' else '-R'
     cmd = 'pacman {0} --noprogressbar --noconfirm {1}'.format(remove_arg,
                                                               ' '.join(targets))
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def remove(name=None, pkgs=None, **kwargs):
@@ -443,7 +469,8 @@ def file_list(*packages):
     errors = []
     ret = []
     cmd = 'pacman -Ql {0}'.format(' '.join(packages))
-    for line in __salt__['cmd.run'](cmd).splitlines():
+    out = __salt__['cmd.run'](cmd, output_loglevel='debug')
+    for line in out.splitlines():
         if line.startswith('error'):
             errors.append(line)
         else:
@@ -469,7 +496,8 @@ def file_dict(*packages):
     errors = []
     ret = {}
     cmd = 'pacman -Ql {0}'.format(' '.join(packages))
-    for line in __salt__['cmd.run'](cmd).splitlines():
+    out = __salt__['cmd.run'](cmd, output_loglevel='debug')
+    for line in out.splitlines():
         if line.startswith('error'):
             errors.append(line)
         else:

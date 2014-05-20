@@ -1,44 +1,49 @@
 # -*- coding: utf-8 -*-
 '''
-Setup of Python virtualenv sandboxes.
-=====================================
+Setup of Python virtualenv sandboxes
+====================================
 
 '''
 
 # Import python libs
 import logging
 import os
-import salt.utils
 
 # Import salt libs
 import salt.version
+import salt.utils
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'virtualenv'
+
 
 def __virtual__():
-    return 'virtualenv'
+    return __virtualname__
 
 
 def managed(name,
-            venv_bin='virtualenv',
+            venv_bin=None,
             requirements=None,
             no_site_packages=None,
             system_site_packages=False,
             distribute=False,
+            use_wheel=False,
             clear=False,
             python=None,
             extra_search_dir=None,
             never_download=None,
             prompt=None,
-            __env__='base',
             user=None,
             runas=None,
             no_chown=False,
             cwd=None,
             index_url=None,
             extra_index_url=None,
-            pre_releases=False):
+            pre_releases=False,
+            no_deps=False,
+            proxy=None):
     '''
     Create a virtualenv and optionally manage it with pip
 
@@ -49,6 +54,12 @@ def managed(name,
         the file will be transferred from the master file server.
     cwd
         Path to the working directory where "pip install" is executed.
+    use_wheel : False
+        Prefer wheel archives (requires pip>=1.4)
+    no_deps: False
+        Pass `--no-deps` to `pip`.
+    proxy: None
+        Proxy address which is passed to "pip install"
 
     Also accepts any kwargs that the virtualenv module will.
 
@@ -67,7 +78,7 @@ def managed(name,
         return ret
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Let\'s support \'runas\' until salt {0} is out, after which it will'
         'stop being supported'.format(
             salt.version.SaltStackVersion.from_name('Helium').formatted_version
@@ -77,7 +88,7 @@ def managed(name,
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:
@@ -155,7 +166,7 @@ def managed(name,
             extra_search_dir=extra_search_dir,
             never_download=never_download,
             prompt=prompt,
-            runas=user
+            user=user
         )
 
         ret['result'] = _ret['retcode'] == 0
@@ -170,16 +181,32 @@ def managed(name,
     elif venv_exists:
         ret['comment'] = 'virtualenv exists'
 
+    if use_wheel:
+        min_version = '1.4'
+        cur_version = __salt__['pip.version'](bin_env=name)
+        if not salt.utils.compare_versions(ver1=cur_version, oper='>=',
+                                           ver2=min_version):
+            ret['result'] = False
+            ret['comment'] = ('The \'use_wheel\' option is only supported in '
+                              'pip {0} and newer. The version of pip detected '
+                              'was {1}.').format(min_version, cur_version)
+            return ret
+
     # Populate the venv via a requirements file
     if requirements:
         before = set(__salt__['pip.freeze'](bin_env=name))
         _ret = __salt__['pip.install'](
-            requirements=requirements, bin_env=name, runas=user, cwd=cwd,
+            requirements=requirements,
+            bin_env=name,
+            use_wheel=use_wheel,
+            user=user,
+            cwd=cwd,
             index_url=index_url,
             extra_index_url=extra_index_url,
             no_chown=no_chown,
-            __env__=__env__,
-            pre_releases=pre_releases
+            pre_releases=pre_releases,
+            no_deps=no_deps,
+            proxy=proxy,
         )
         ret['result'] &= _ret['retcode'] == 0
         if _ret['retcode'] > 0:

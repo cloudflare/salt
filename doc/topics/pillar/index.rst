@@ -150,7 +150,7 @@ key under which to nest the results of the included pillar:
     include:
       - users:
           defaults:
-            - sudo: ['bob', 'paul']
+              sudo: ['bob', 'paul']
           key: users
 
 With this form, the included file (users.sls) will be nested within the 'users'
@@ -210,6 +210,16 @@ back if the value is not available:
     {{ salt['pillar.get']('foo:bar:baz', 'qux') }}
 
 This makes handling nested structures much easier.
+
+.. note:: ``pillar.get()`` vs ``salt['pillar.get']()``
+
+    It should be noted that within templating, the ``pillar`` variable is just
+    a dictionary.  This means that calling ``pillar.get()`` inside of a
+    template will just use the default dictionary ``.get()`` function which
+    does not include the extra ``:`` delimeter functionality.  It must be
+    called using the above syntax (``salt['pillar.get']('foo:bar:baz',
+    'qux')``) to get the salt function, instead of the default dictionary
+    behavior.
 
 
 Refreshing Pillar Data

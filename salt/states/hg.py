@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Interaction with Mercurial repositories.
-========================================
+Interaction with Mercurial repositories
+=======================================
 
 Before using hg over ssh, make sure the remote host fingerprint already exists
 in ~/.ssh/known_hosts, and the remote host has this host's public key.
@@ -80,7 +80,7 @@ def latest(name,
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -88,7 +88,7 @@ def latest(name,
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:

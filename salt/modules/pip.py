@@ -52,21 +52,21 @@ def _get_pip_bin(bin_env):
     return bin_env
 
 
-def _get_cached_requirements(requirements, __env__):
+def _get_cached_requirements(requirements, saltenv):
     '''Get the location of a cached requirements file; caching if necessary.'''
     cached_requirements = __salt__['cp.is_cached'](
-        requirements, __env__
+        requirements, saltenv
     )
     if not cached_requirements:
         # It's not cached, let's cache it.
         cached_requirements = __salt__['cp.cache_file'](
-            requirements, __env__
+            requirements, saltenv
         )
     # Check if the master version has changed.
-    if __salt__['cp.hash_file'](requirements, __env__) != \
-            __salt__['cp.hash_file'](cached_requirements, __env__):
+    if __salt__['cp.hash_file'](requirements, saltenv) != \
+            __salt__['cp.hash_file'](cached_requirements, saltenv):
         cached_requirements = __salt__['cp.cache_file'](
-            requirements, __env__
+            requirements, saltenv
         )
 
     return cached_requirements
@@ -120,7 +120,8 @@ def install(pkgs=None,
             cwd=None,
             activate=False,
             pre_releases=False,
-            __env__='base'):
+            __env__=None,
+            saltenv='base'):
     '''
     Install packages with pip
 
@@ -245,10 +246,20 @@ def install(pkgs=None,
     if env and not bin_env:
         bin_env = env
 
+    if isinstance(__env__, string_types):
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'__env__\'. This functionality will be removed in Salt '
+            'Boron.'
+        )
+        # Backwards compatibility
+        saltenv = __env__
+
     if runas is not None:
         # The user is using a deprecated argument, warn!
         salt.utils.warn_until(
-            'Hydrogen',
+            'Lithium',
             'The \'runas\' argument to pip.install is deprecated, and will be '
             'removed in Salt {version}. Please use \'user\' instead.'
         )
@@ -279,7 +290,7 @@ def install(pkgs=None,
             treq = None
             if requirement.startswith('salt://'):
                 cached_requirements = _get_cached_requirements(
-                    requirement, __env__
+                    requirement, saltenv
                 )
                 if not cached_requirements:
                     return {
@@ -344,7 +355,7 @@ def install(pkgs=None,
             find_links = [l.strip() for l in find_links.split(',')]
 
         for link in find_links:
-            if not salt.utils.valid_url(link, VALID_PROTOS) or os.path.exists(link):
+            if not (salt.utils.valid_url(link, VALID_PROTOS) or os.path.exists(link)):
                 raise CommandExecutionError(
                     '{0!r} must be a valid URL or path'.format(link)
                 )
@@ -470,7 +481,7 @@ def install(pkgs=None,
 
         for entry in editable:
             # Is the editable local?
-            if not entry.startswith(('file://', '/')):
+            if not (entry == '.' or entry.startswith(('file://', '/'))):
                 match = egg_match.search(entry)
 
                 if not match or not match.group(1):
@@ -481,7 +492,7 @@ def install(pkgs=None,
             cmd.append('--editable={0}'.format(entry))
 
     try:
-        cmd_kwargs = dict(runas=user, cwd=cwd)
+        cmd_kwargs = dict(runas=user, cwd=cwd, saltenv=saltenv)
         if bin_env and os.path.isdir(bin_env):
             cmd_kwargs['env'] = {'VIRTUAL_ENV': bin_env}
         return __salt__['cmd.run_all'](' '.join(cmd), **cmd_kwargs)
@@ -503,7 +514,8 @@ def uninstall(pkgs=None,
               runas=None,
               no_chown=False,
               cwd=None,
-              __env__='base'):
+              __env__=None,
+              saltenv='base'):
     '''
     Uninstall packages with pip
 
@@ -556,10 +568,20 @@ def uninstall(pkgs=None,
     '''
     cmd = [_get_pip_bin(bin_env), 'uninstall', '-y']
 
+    if isinstance(__env__, string_types):
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' '
+            'not \'__env__\'. This functionality will be removed in Salt '
+            'Boron.'
+        )
+        # Backwards compatibility
+        saltenv = __env__
+
     if runas is not None:
         # The user is using a deprecated argument, warn!
         salt.utils.warn_until(
-            'Hydrogen',
+            'Lithium',
             'The \'runas\' argument to pip.install is deprecated, and will be '
             'removed in Salt {version}. Please use \'user\' instead.'
         )
@@ -584,7 +606,7 @@ def uninstall(pkgs=None,
             treq = None
             if requirement.startswith('salt://'):
                 cached_requirements = _get_cached_requirements(
-                    requirement, __env__
+                    requirement, saltenv
                 )
                 if not cached_requirements:
                     return {
@@ -636,7 +658,7 @@ def uninstall(pkgs=None,
             pkgs = [p.strip() for p in pkgs.split(',')]
         cmd.extend(pkgs)
 
-    cmd_kwargs = dict(runas=user, cwd=cwd)
+    cmd_kwargs = dict(runas=user, cwd=cwd, saltenv=saltenv)
     if bin_env and os.path.isdir(bin_env):
         cmd_kwargs['env'] = {'VIRTUAL_ENV': bin_env}
 
@@ -683,7 +705,7 @@ def freeze(bin_env=None,
     if runas is not None:
         # The user is using a deprecated argument, warn!
         salt.utils.warn_until(
-            'Hydrogen',
+            'Lithium',
             'The \'runas\' argument to pip.install is deprecated, and will be '
             'removed in Salt {version}. Please use \'user\' instead.'
         )
@@ -735,7 +757,7 @@ def list_(prefix=None,
     if runas is not None:
         # The user is using a deprecated argument, warn!
         salt.utils.warn_until(
-            'Hydrogen',
+            'Lithium',
             'The \'runas\' argument to pip.install is deprecated, and will be '
             'removed in Salt {version}. Please use \'user\' instead.'
         )
@@ -767,8 +789,9 @@ def list_(prefix=None,
         raise CommandExecutionError(result['stderr'])
 
     for line in result['stdout'].splitlines():
-        if line.startswith('-f'):
+        if line.startswith('-f') or line.startswith('#'):
             # ignore -f line as it contains --find-links directory
+            # ignore comment lines
             continue
         elif line.startswith('-e'):
             line = line.split('-e ')[1]

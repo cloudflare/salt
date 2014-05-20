@@ -14,13 +14,16 @@ __func_alias__ = {
     'reload_': 'reload'
 }
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
 
 def __virtual__():
     '''
     Only work on Debian and when systemd isn't running
     '''
     if __grains__['os'] in ('Debian', 'Raspbian') and not _sd_booted():
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -83,6 +86,21 @@ def available(name):
         salt '*' service.available sshd
     '''
     return name in get_all()
+
+
+def missing(name):
+    '''
+    The inverse of service.available.
+    Returns ``True`` if the specified service is not available, otherwise returns
+    ``False``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+    '''
+    return not name in get_all()
 
 
 def get_all():

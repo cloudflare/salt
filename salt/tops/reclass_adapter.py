@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
+Read tops data from a reclass database
+
 .. |reclass| replace:: **reclass**
 
 This :doc:`master_tops </topics/master_tops/index>` plugin provides access to
@@ -18,7 +20,7 @@ inventory:
     master_tops:
       reclass:
         storage_type: yaml_fs
-        base_inventory_uri: /srv/salt
+        inventory_base_uri: /srv/salt
 
 This would cause |reclass| to read the inventory from YAML files in
 ``/srv/salt/nodes`` and ``/srv/salt/classes``.
@@ -31,7 +33,7 @@ note of the differing data types for ``ext_pillar`` and ``master_tops``):
 
     reclass: &reclass
       storage_type: yaml_fs
-      base_inventory_uri: /srv/salt
+      inventory_base_uri: /srv/salt
       reclass_source_path: ~/code/reclass
 
     ext_pillar:
@@ -58,11 +60,14 @@ from salt.utils.reclass import (
 
 from salt.exceptions import SaltInvocationError
 
+# Define the module's virtual name
+__virtualname__ = 'reclass'
+
 
 def __virtual__(retry=False):
     try:
         import reclass
-        return 'reclass'
+        return __virtualname__
     except ImportError:
         if retry:
             return False

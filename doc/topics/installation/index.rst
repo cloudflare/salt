@@ -71,8 +71,8 @@ Dependencies
 Salt should run on any Unix-like platform so long as the dependencies are met.
 
 * `Python 2.6`_ >= 2.6 <3.0
-* `ZeroMQ`_ >= 2.1.9
-* `pyzmq`_ >= 2.1.9 - ZeroMQ Python bindings
+* `ZeroMQ`_ >= 3.2.0
+* `pyzmq`_ >= 2.2.0 - ZeroMQ Python bindings
 * `PyCrypto`_ - The Python cryptography toolkit
 * `msgpack-python`_ - High-performance message interchange format
 * `YAML`_ - Python YAML bindings
@@ -96,3 +96,14 @@ Optional Dependencies
 .. _`Jinja2`: http://jinja.pocoo.org/
 .. _`mako`: http://www.makotemplates.org/
 
+
+Upgrading Salt
+--------------
+
+When upgrading Salt, the master(s) should always be upgraded first.  Backwards
+compatibility for minions running newer versions of salt than their masters is
+not guaranteed.
+
+Whenever possible, backwards compatibility between new masters
+and old minions will be preserved.  Generally, the only exception to this
+policy is in case of a security vulnerability.

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Managing Ruby installations with rbenv.
-========================================
+Managing Ruby installations with rbenv
+======================================
 
 This module is used to install and manage ruby installations with rbenv.
 Different versions of ruby can be installed, and uninstalled. Rbenv will
@@ -121,7 +121,7 @@ def installed(name, default=False, runas=None, user=None):
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -129,7 +129,7 @@ def installed(name, default=False, runas=None, user=None):
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:
@@ -210,7 +210,7 @@ def absent(name, runas=None, user=None):
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -218,7 +218,7 @@ def absent(name, runas=None, user=None):
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:

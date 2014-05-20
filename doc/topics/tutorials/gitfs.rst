@@ -202,6 +202,42 @@ for the user running the salt-master.
 .. note::
 
     GitFS requires the Python module ``GitPython``, version 0.3.0 or newer.
+    If your Master runs Ubuntu 12.04 LTS, you will likely need to install
+    GitPython using `pip`_.
+
+    .. code-block:: bash
+
+        # pip install GitPython
+
+.. _`pip`: http://www.pip-installer.org/
+
+
+Using Git as an External Pillar Source
+======================================
+
+Git repositories can also be used to provide :doc:`Pillar </topics/pillar/index>`
+data, using the :doc:`External Pillar </topics/development/external_pillars>`
+system. To define a git external pillar, you can add a section like the
+following to your master config file:
+
+.. code-block:: yaml
+
+    ext_pillar:
+      - git: <branch> <repo>
+
+
+The ``<branch>`` param is the branch containing the pillar SLS tree, and the
+``<repo>`` param is the URI for the repository. The below example would add the
+``master`` branch of the specified repo as an external pillar source.
+
+.. code-block:: yaml
+
+    ext_pillar:
+      - git: master https://domain.com/pillar.git
+
+More information on the git external pillar can be found :mod:`here
+<salt.pillar.git_pillar>`.
+
 
 .. _faq-gitfs-bug:
 
@@ -216,4 +252,4 @@ synced, and thus interrupt the sync itself. Try disabling the git fileserver
 backend in the master config, restarting the master, and attempting the sync
 again.
 
-This issue will be worked around in Salt 0.16.4 and newer.
+This issue is worked around in Salt 0.16.4 and newer.

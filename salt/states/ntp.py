@@ -3,6 +3,8 @@
 Management of NTP servers
 =========================
 
+.. versionadded:: 2014.1.0 (Hydrogen)
+
 This state is used to manage NTP servers. Currently only Windows is supported.
 
 .. code-block:: yaml
@@ -16,7 +18,6 @@ This state is used to manage NTP servers. Currently only Windows is supported.
 
 # Import python libs
 import logging
-import sys
 
 # Import salt libs
 from salt._compat import string_types

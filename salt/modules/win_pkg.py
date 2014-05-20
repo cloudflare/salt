@@ -23,7 +23,10 @@ except ImportError:
 # Import python libs
 import copy
 import logging
-import msgpack
+try:
+    import msgpack
+except ImportError:
+    import msgpack_pure as msgpack
 import os
 import locale
 from distutils.version import LooseVersion  # pylint: disable=E0611
@@ -33,13 +36,16 @@ import salt.utils
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'pkg'
+
 
 def __virtual__():
     '''
     Set the virtual pkg module if the os is Windows
     '''
     if salt.utils.is_windows() and HAS_DEPENDENCIES:
-        return 'pkg'
+        return __virtualname__
     return False
 
 
@@ -231,8 +237,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs versions_as_list=True
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
@@ -440,7 +447,7 @@ def _get_reg_value(reg_hive, reg_key, value_name=''):
     return value_data
 
 
-def refresh_db():
+def refresh_db(saltenv='base'):
     '''
     Just recheck the repository and return a dict::
 
@@ -454,18 +461,18 @@ def refresh_db():
     '''
     __context__.pop('winrepo.data', None)
     repocache = __opts__['win_repo_cachefile']
-    cached_repo = __salt__['cp.is_cached'](repocache)
+    cached_repo = __salt__['cp.is_cached'](repocache, saltenv)
     if not cached_repo:
         # It's not cached. Cache it, mate.
-        cached_repo = __salt__['cp.cache_file'](repocache)
+        cached_repo = __salt__['cp.cache_file'](repocache, saltenv)
         return True
     # Check if the master's cache file has changed
-    if __salt__['cp.hash_file'](repocache) != __salt__['cp.hash_file'](cached_repo):
-        cached_repo = __salt__['cp.cache_file'](repocache)
+    if __salt__['cp.hash_file'](repocache) != __salt__['cp.hash_file'](cached_repo, saltenv):
+        cached_repo = __salt__['cp.cache_file'](repocache, saltenv)
     return True
 
 
-def install(name=None, refresh=False, pkgs=None, **kwargs):
+def install(name=None, refresh=False, pkgs=None, saltenv='base', **kwargs):
     '''
     Install the passed package
 
@@ -494,55 +501,62 @@ def install(name=None, refresh=False, pkgs=None, **kwargs):
 
     old = list_pkgs()
 
-    if pkgs is None and kwargs.get('version') and len(pkg_params) == 1:
+    if pkgs is None and len(pkg_params) == 1:
         # Only use the 'version' param if 'name' was not specified as a
         # comma-separated list
-        pkg_params = {name: kwargs.get('version')}
+        pkg_params = {name:
+                         {
+                             'version': kwargs.get('version'),
+                             'extra_install_flags': kwargs.get('extra_install_flags')}}
 
-    for param, version_num in pkg_params.iteritems():
-        pkginfo = _get_package_info(param)
+    for pkg_name, options in pkg_params.iteritems():
+        pkginfo = _get_package_info(pkg_name)
         if not pkginfo:
-            log.error('Unable to locate package {0}'.format(name))
+            log.error('Unable to locate package {0}'.format(pkg_name))
             continue
 
-        version_num = version_num or _get_latest_pkg_version(pkginfo)
+        version_num = options and options.get('version') or _get_latest_pkg_version(pkginfo)
 
         if version_num in [old.get(pkginfo[x]['full_name']) for x in pkginfo]:
             # Desired version number already installed
             continue
         elif version_num not in pkginfo:
             log.error('Version {0} not found for package '
-                      '{1}'.format(version_num, param))
+                      '{1}'.format(version_num, pkg_name))
             continue
 
         installer = pkginfo[version_num].get('installer')
         if not installer:
             log.error('No installer configured for version {0} of package '
-                      '{1}'.format(version_num, param))
+                      '{1}'.format(version_num, pkg_name))
 
         if installer.startswith('salt:') \
                 or installer.startswith('http:') \
                 or installer.startswith('https:') \
                 or installer.startswith('ftp:'):
-            cached_pkg = __salt__['cp.is_cached'](installer)
+            cached_pkg = __salt__['cp.is_cached'](installer, saltenv)
             if not cached_pkg:
                 # It's not cached. Cache it, mate.
-                cached_pkg = __salt__['cp.cache_file'](installer)
+                cached_pkg = __salt__['cp.cache_file'](installer, saltenv)
+            if __salt__['cp.hash_file'](installer, saltenv) != \
+                                          __salt__['cp.hash_file'](cached_pkg):
+                cached_pkg = __salt__['cp.cache_file'](installer, saltenv)
         else:
             cached_pkg = installer
 
         cached_pkg = cached_pkg.replace('/', '\\')
         msiexec = pkginfo[version_num].get('msiexec')
+        install_flags = '{0} {1}'.format(pkginfo[version_num]['install_flags'], options and options.get('extra_install_flags') or "")
         cmd = '{msiexec}"{cached_pkg}" {install_flags}'.format(
             msiexec='msiexec /i ' if msiexec else '',
             cached_pkg=cached_pkg,
-            install_flags=pkginfo[version_num]['install_flags']
+            install_flags=install_flags
         )
-        __salt__['cmd.run_all'](cmd)
+        __salt__['cmd.run'](cmd, output_loglevel='debug')
 
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def upgrade(refresh=True):
@@ -569,7 +583,7 @@ def upgrade(refresh=True):
     return {}
 
 
-def remove(name=None, pkgs=None, version=None, **kwargs):
+def remove(name=None, pkgs=None, version=None, extra_uninstall_flags=None, **kwargs):
     '''
     Remove packages.
 
@@ -631,14 +645,14 @@ def remove(name=None, pkgs=None, version=None, **kwargs):
                 and '(x86)' in cached_pkg:
             cached_pkg = cached_pkg.replace('(x86)', '')
         cmd = '"' + str(os.path.expandvars(
-            cached_pkg)) + '"' + str(pkginfo[version].get('uninstall_flags', ''))
+            cached_pkg)) + '"' + str(pkginfo[version].get('uninstall_flags', '') + " " + (extra_uninstall_flags or ''))
         if pkginfo[version].get('msiexec'):
             cmd = 'msiexec /x ' + cmd
-        __salt__['cmd.run_all'](cmd)
+        __salt__['cmd.run'](cmd, output_loglevel='debug')
 
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def purge(name=None, pkgs=None, version=None, **kwargs):
@@ -677,7 +691,7 @@ def purge(name=None, pkgs=None, version=None, **kwargs):
     return remove(name=name, pkgs=pkgs, version=version, **kwargs)
 
 
-def get_repo_data():
+def get_repo_data(saltenv='base'):
     '''
     Returns the cached winrepo data
 
@@ -690,11 +704,11 @@ def get_repo_data():
     #if 'winrepo.data' in __context__:
     #    return __context__['winrepo.data']
     repocache = __opts__['win_repo_cachefile']
-    cached_repo = __salt__['cp.is_cached'](repocache)
+    cached_repo = __salt__['cp.is_cached'](repocache, saltenv)
     if not cached_repo:
         __salt__['pkg.refresh_db']()
     try:
-        with salt.utils.fopen(cached_repo, 'r') as repofile:
+        with salt.utils.fopen(cached_repo, 'rb') as repofile:
             try:
                 repodata = msgpack.loads(repofile.read()) or {}
                 #__context__['winrepo.data'] = repodata

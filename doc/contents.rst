@@ -1,5 +1,5 @@
 ======================
-Full Table of Contents
+Salt Table of Contents
 ======================
 
 .. toctree::
@@ -19,12 +19,12 @@ Full Table of Contents
     topics/master_tops/index
     topics/jobs/*
     topics/nonroot
-    topics/troubleshooting/index
-    topics/troubleshooting/yaml_idiosyncrasies
+    topics/troubleshooting/*
     topics/community
     topics/projects/index
     topics/event/index
     topics/mine/*
+    topics/cloud/index
     topics/virt/*
     topics/ssh/*
     topics/tests/*
@@ -32,6 +32,9 @@ Full Table of Contents
     topics/conventions/*
     topics/git/*
     topics/development/index
+    topics/translating
+    topics/salt_projects
+    topics/proxyminion/index
 
     ref/configuration/logging/*
     ref/configuration/logging/handlers/*
@@ -53,6 +56,7 @@ Full Table of Contents
     ref/wheel/all/index
     ref/auth/all/index
     ref/output/all/index
+    ref/clouds/all/index
     ref/clients/index
     ref/peer
     ref/clientacl
@@ -74,5 +78,6 @@ Full Table of Contents
     ref/cli/salt-run
     ref/cli/salt-ssh
     ref/cli/salt-syndic
+    ref/cli/salt-cloud
 
     topics/releases/index

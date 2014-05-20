@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 '''
 Manage RabbitMQ Clusters
+========================
+
+Example:
 
 .. code-block:: yaml
 
@@ -31,7 +34,11 @@ def join(name, host, user='rabbit', runas=None):
     Ensure the RabbitMQ plugin is enabled.
 
     name
-        The name of the plugin
+        Irrelevant, not used (recommended: user@host)
+    user
+        The user to join the cluster as (default: rabbit)
+    host
+        The cluster host to join to
     runas
         The user to run the rabbitmq-plugin command as
     '''
@@ -39,22 +46,24 @@ def join(name, host, user='rabbit', runas=None):
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
     result = {}
 
+    joined = __salt__['rabbitmq.cluster_status']()
+    if '{0}@{1}'.format(user, host) in joined:
+        ret['comment'] = 'Already in cluster'
+        return ret
+
     if __opts__['test']:
         ret['result'] = None
         ret['comment'] = 'Host is set to join cluster {0}@{1}'.format(
             user, host)
-    else:
-        joined = __salt__['rabbitmq.cluster_status']()
-        if '{0}@{1}'.format(user, host) in joined:
-            ret['comment'] = 'Already joined cluster'
-            return ret
+        return ret
 
-        result = __salt__['rabbitmq.join_cluster'](host, user, runas=runas)
+    result = __salt__['rabbitmq.join_cluster'](host, user, runas=runas)
 
-        if 'Error' in result:
-            ret['result'] = False
-            ret['comment'] = result['Error']
-        elif 'Join' in result:
-            ret['comment'] = result['Join']
+    if 'Error' in result:
+        ret['result'] = False
+        ret['comment'] = result['Error']
+    elif 'Join' in result:
+        ret['comment'] = result['Join']
+        ret['changes'] = {'old': '', 'new': '{0}@{1}'.format(user, host)}
 
     return ret

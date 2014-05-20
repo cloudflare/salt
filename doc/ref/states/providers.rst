@@ -33,8 +33,8 @@ Setting a Provider in the Minion Config File
 
 .. _`issue tracker`: https://github.com/saltstack/salt/issues
 
-Sometimes, when running Salt on custom Linux spins, or distros that are derived
-from other distros, Salt does not successfully detect providers. The providers
+Sometimes, when running Salt on custom Linux spins, or distribution that are derived
+from other distributions, Salt does not successfully detect providers. The providers
 which are most likely to be affected by this are:
 
 - pkg
@@ -74,9 +74,7 @@ pkgng                   FreeBSD-based OSes using ``pkg(8)``
 pkgutil                 Solaris-based OSes using `OpenCSW`_'s ``pkgutil(1)``
 solarispkg              Solaris-based OSes using ``pkgadd(1M)``
 win_pkg                 Windows
-yumpkg                  RedHat-based distros and derivatives (utilizes the
-                        ``yum`` and ``rpmUtils`` modules)
-yumpkg5                 RedHat-based distros and derivatives (wraps ``yum(8)``)
+yumpkg                  RedHat-based distros and derivatives (wraps ``yum(8)``)
 zypper                  SUSE-based distros using ``zypper(8)``
 ======================= =======================================================
 
@@ -90,7 +88,7 @@ Provider: ``service``
 ======================= =======================================================
 Execution Module        Used for
 ======================= =======================================================
-debian_service          Debian Linux (non-systemd)
+debian_service          Debian (non-systemd)
 freebsdservice          FreeBSD-based OSes using ``service(8)``
 gentoo_service          Gentoo Linux using :program:`sysvinit` and
                         ``rc-update(8)``
@@ -150,11 +148,10 @@ module can be used to provide certain functionality.
     emacs:
       pkg.installed:
         - provider:
-          - pkg: yumpkg5
           - cmd: customcmd
 
-In this example the default :py:mod:`~salt.modules.pkg` module is being
-redirected to use the :py:mod:`~salt.modules.yumpkg5` module (:program:`yum`
-via shelling out instead of via the :program:`yum` Python API), but is also
-using a custom module to invoke commands. This could be used to dramatically
-change the behavior of a given state.
+In this example, the state is being instructed to use a custom module to invoke
+commands.
+
+Arbitrary module redirects can be used to dramatically change the behavior of a
+given state.

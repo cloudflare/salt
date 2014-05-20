@@ -20,6 +20,7 @@ ensure_in_syspath('../')
 # Import salt libs
 import salt.pillar
 
+
 @skipIf(NO_MOCK, NO_MOCK_REASON)
 class PillarTestCase(TestCase):
 
@@ -29,6 +30,7 @@ class PillarTestCase(TestCase):
             'renderer': 'json',
             'state_top': '',
             'pillar_roots': [],
+            'file_roots': [],
             'extension_modules': ''
         }
         grains = {
@@ -109,6 +111,7 @@ class PillarTestCase(TestCase):
             'pillar_roots': [],
             'extension_modules': '',
             'environment': 'base',
+            'file_roots': [],
         }
         grains = {
             'os': 'Ubuntu',

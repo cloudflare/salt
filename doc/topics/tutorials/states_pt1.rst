@@ -1,6 +1,6 @@
-=======================
-States tutorial, part 1
-=======================
+=====================================
+States tutorial, part 1 - Basic Usage
+=====================================
 
 The purpose of this tutorial is to demonstrate how quickly you can configure a
 system to be managed by Salt States. For detailed information about the state
@@ -71,11 +71,11 @@ minion matches is defined; for now simply specify all hosts (``*``).
             - match: grain
             - webserver
 
-Create an ``sls`` module
-========================
+Create an ``sls`` file
+======================
 
-In the same directory as the :term:`top file`, create an empty file named
-``webserver.sls``, containing the following:
+In the same directory as the :ref:`top file <states-top>`, create a file
+named ``webserver.sls``, containing the following:
 
 .. code-block:: yaml
 
@@ -84,10 +84,13 @@ In the same directory as the :term:`top file`, create an empty file named
         - installed         # function declaration
 
 The first line, called the :term:`ID declaration`, is an arbitrary identifier.
-In this case it defines the name of the package to be installed. **NOTE:** the
-package name for the Apache httpd web server may differ depending on OS or 
-distro — for example, on Fedora it is ``httpd`` but on Debian/Ubuntu it 
-is ``apache2``.
+In this case it defines the name of the package to be installed. 
+
+.. note::
+
+    The package name for the Apache httpd web server may differ depending on
+    OS or distro — for example, on Fedora it is ``httpd`` but on
+    Debian/Ubuntu it is ``apache2``.
 
 The second line, called the :term:`state declaration`, defines which of the
 Salt States we are using. In this example, we are using the :mod:`pkg state

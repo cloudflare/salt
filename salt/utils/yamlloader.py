@@ -77,8 +77,7 @@ class CustomLoader(yaml.SafeLoader):
                 raise ConstructorError(err)
             value = self.construct_object(value_node, deep=deep)
             if key in mapping:
-                warnings.warn(
-                    'Duplicate Key: "{0}"'.format(key), DuplicateKeyWarning)
+                raise ConstructorError('Conflicting ID "{0}"'.format(key))
             mapping[key] = value
         return mapping
 
@@ -97,4 +96,4 @@ class CustomLoader(yaml.SafeLoader):
                 # an empty string. Change it to '0'.
                 if node.value == '':
                     node.value = '0'
-        return yaml.constructor.SafeConstructor.construct_scalar(self, node)
+        return super(CustomLoader, self).construct_scalar(node)

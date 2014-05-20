@@ -7,7 +7,7 @@ Is Salt open-core?
 ------------------
 
 No. Salt is 100% committed to being open-source, including all of our APIs and
-the new `'Halite' web interface`_ which will be included in version 0.17.0. It
+the new `'Halite' web interface`_ which was introduced in version 0.17.0. It
 is developed under the `Apache 2.0 license`_, allowing it to be used in both
 open and proprietary projects.
 
@@ -20,6 +20,12 @@ What ports should I open on my firewall?
 Minions need to be able to connect to the Master on TCP ports 4505 and 4506.
 Minions do not need any inbound ports open. More detailed information on
 firewall settings can be found :doc:`here </topics/tutorials/firewall>`.
+
+I'm seeing weird behavior (including but not limited to packages not installing their users properly)
+-----------------------------------------------------------------------------------------------------
+
+This is often caused by SELinux.  Try disabling SELinux or putting it in
+permissive mode and see if the weird behavior goes away.
 
 My script runs every time I run a *state.highstate*. Why?
 ---------------------------------------------------------
@@ -114,7 +120,7 @@ This is most likely a PATH issue. Did you custom-compile the software which the
 module requires? RHEL/CentOS/etc. in particular override the root user's path
 in ``/etc/init.d/functions``, setting it to ``/sbin:/usr/sbin:/bin:/usr/bin``,
 making software installed into ``/usr/local/bin`` unavailable to Salt when the
-Minion is started using the initscript. In version 0.18.0, Salt will have a
+Minion is started using the initscript. In version 2014.1.0, Salt will have a
 better solution for these sort of PATH-related issues, but recompiling the
 software to install it into a location within the PATH should resolve the
 issue in the meantime. Alternatively, you can create a symbolic link within the
@@ -125,3 +131,21 @@ PATH using a :mod:`file.symlink <salt.states.file.symlink>` state.
     /usr/bin/foo:
       file.symlink:
         - target: /usr/local/bin/foo
+
+Can I run different versions of Salt on my Master and Minion?
+-------------------------------------------------------------
+
+As of release 0.17.1 backwards compatibility was broken (specifically for
+0.17.1 trying to interface with older releases) due to a protocol change for
+security purposes. The Salt team continues to emphasize backwards compatiblity
+as an important feature and plans to support it to the best of our ability to
+do so.
+
+Does Salt support backing up managed files?
+-------------------------------------------
+
+Yes. Salt provides an easy to use addition to your file.managed states that
+allow you to back up files via :doc:`backup_mode </ref/states/backup_mode>`,
+backup_mode can be configured on a per state basis, or in the minion config
+(note that if set in the minion config this would simply be the default
+method to use, you still need to specify that the file should be backed up!).

@@ -15,10 +15,10 @@ def _parse_key(key):
     '''
     split the full path in the registry to the key and the rest
     '''
-    splt = key.split('\\')
+    splt = key.split(r'\\')
     hive = splt.pop(0)
     key = splt.pop(-1)
-    path = '\\'.join(splt)
+    path = r'\\'.join(splt)
     return hive, path, key
 
 
@@ -44,7 +44,7 @@ def present(name, value, vtype='REG_DWORD'):
         ret['comment'] = '{0} is already configured'.format(name)
         return ret
     else:
-        ret['changes'] = {'reg': 'configured to {}'.format(value)}
+        ret['changes'] = {'reg': 'configured to {0}'.format(value)}
 
     if __opts__['test']:
         ret['result'] = None

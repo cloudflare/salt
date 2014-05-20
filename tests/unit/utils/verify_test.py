@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 '''
 Test the verification routines
 '''
@@ -29,7 +30,8 @@ from salt.utils.verify import (
     verify_env,
     verify_socket,
     zmq_version,
-    check_max_open_files
+    check_max_open_files,
+    valid_id
 )
 
 
@@ -37,6 +39,14 @@ class TestVerify(TestCase):
     '''
     Verify module tests
     '''
+
+    def test_valid_id_exception_handler(self):
+        '''
+        Ensure we just return False if we pass in invalid or undefined paths.
+        Refs #8259
+        '''
+        opts = {'pki_dir': '/tmp/whatever'}
+        self.assertFalse(valid_id(opts, None))
 
     def test_zmq_verify(self):
         self.assertTrue(zmq_version())
@@ -88,7 +98,16 @@ class TestVerify(TestCase):
         if socket.has_ipv6:
             # Only run if Python is built with IPv6 support; otherwise
             # this will just fail.
-            self.assertTrue(verify_socket('::', 18000, 18001))
+            try:
+                self.assertTrue(verify_socket('::', 18000, 18001))
+            except socket.error as serr:
+                # Python has IPv6 enabled, but the system cannot create
+                # IPv6 sockets (otherwise the test would return a bool)
+                # - skip the test
+                #
+                # FIXME - possibly emit a message that the system does
+                # not support IPv6.
+                pass
 
     @skipIf(os.environ.get('TRAVIS_PYTHON_VERSION', None) is not None,
             'Travis environment does not like too many open files')

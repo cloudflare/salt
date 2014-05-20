@@ -17,13 +17,16 @@ LOCAL_CONFIG_PATH = '/etc/systemd/system'
 VALID_UNIT_TYPES = ['service', 'socket', 'device', 'mount', 'automount',
                     'swap', 'target', 'path', 'timer']
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
 
 def __virtual__():
     '''
     Only work on systems that have been booted with systemd
     '''
     if __grains__['kernel'] == 'Linux' and _sd_booted():
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -98,7 +101,7 @@ def _untracked_custom_unit_found(name):
     '''
     unit_path = os.path.join('/etc/systemd/system',
                              _canonical_unit_name(name))
-    return (name not in get_all() and os.access(unit_path, os.R_OK))
+    return name not in get_all() and os.access(unit_path, os.R_OK)
 
 
 def _unit_file_changed(name):
@@ -185,6 +188,21 @@ def available(name):
         salt '*' service.available sshd
     '''
     return _canonical_template_unit_name(name) in get_all()
+
+
+def missing(name):
+    '''
+    The inverse of service.available.
+    Returns ``True`` if the specified service is not available, otherwise returns
+    ``False``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+    '''
+    return not _canonical_template_unit_name(name) in get_all()
 
 
 def start(name):

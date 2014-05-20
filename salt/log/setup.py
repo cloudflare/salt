@@ -33,7 +33,6 @@ GARBAGE = logging.GARBAGE = 1
 QUIET = logging.QUIET = 1000
 
 # Import salt libs
-from salt._compat import string_types
 from salt.log.handlers import TemporaryLoggingHandler
 from salt.log.mixins import LoggingMixInMeta, NewStyleClassMixIn
 
@@ -41,6 +40,7 @@ LOG_LEVELS = {
     'all': logging.NOTSET,
     'debug': logging.DEBUG,
     'error': logging.ERROR,
+    'critical': logging.CRITICAL,
     'garbage': GARBAGE,
     'info': logging.INFO,
     'quiet': QUIET,
@@ -395,7 +395,7 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
                 # Logging facilities start with LOG_ if this is not the case
                 # fail right now!
                 raise RuntimeError(
-                    'The syslog facility {0!r} is not know'.format(
+                    'The syslog facility {0!r} is not known'.format(
                         facility_name
                     )
                 )
@@ -410,7 +410,7 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
             # This python syslog version does not know about the user provided
             # facility name
             raise RuntimeError(
-                'The syslog facility {0!r} is not know'.format(
+                'The syslog facility {0!r} is not known'.format(
                     facility_name
                 )
             )
@@ -444,10 +444,7 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
                     err
                 )
             )
-            # Do not proceed with any more configuration since it will fail, we
-            # have the console logging already setup and the user should see
-            # the error.
-            return
+            sys.exit(2)
     else:
         try:
             # Logfile logging is UTF-8 on purpose.
@@ -458,11 +455,14 @@ def setup_logfile_logger(log_path, log_level='error', log_format=None,
                 logging.handlers, 'WatchedFileHandler', logging.FileHandler
             )(log_path, mode='a', encoding='utf-8', delay=0)
         except (IOError, OSError):
-            sys.stderr.write(
+            logging.getLogger(__name__).warning(
                 'Failed to open log file, do you have permission to write to '
-                '{0}\n'.format(log_path)
+                '{0}?'.format(log_path)
             )
-            sys.exit(2)
+            # Do not proceed with any more configuration since it will fail, we
+            # have the console logging already setup and the user should see
+            # the error.
+            return
 
     handler.setLevel(level)
 
@@ -513,8 +513,6 @@ def setup_extended_logging(opts):
         handlers = get_handlers_func()
         if isinstance(handlers, types.GeneratorType):
             handlers = list(handlers)
-        elif isinstance(handlers, string_types):
-            handlers = [handlers]
         elif handlers is False or handlers == [False]:
             # A false return value means not configuring any logging handler on
             # purpose
@@ -524,6 +522,9 @@ def setup_extended_logging(opts):
                 'purpose. Continuing...'.format(name)
             )
             continue
+        else:
+            # Make sure we have an iterable
+            handlers = [handlers]
 
         for handler in handlers:
             if not handler and \

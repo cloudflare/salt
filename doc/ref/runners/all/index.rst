@@ -15,9 +15,11 @@ Full list of runner modules
     fileserver
     jobs
     launchd
+    lxc
     manage
     network
     search
     state
+    thin
     virt
     winrepo

@@ -14,6 +14,8 @@ import salt
 import salt.version
 import salt.loader
 
+__proxyenabled__ = ['*']
+
 
 def echo(text):
     '''
@@ -39,7 +41,11 @@ def ping():
 
         salt '*' test.ping
     '''
-    return True
+
+    if 'proxyobject' in __opts__:
+        return __opts__['proxyobject'].ping()
+    else:
+        return True
 
 
 def sleep(length):
@@ -184,6 +190,29 @@ def arg(*args, **kwargs):
         salt '*' test.arg 1 "two" 3.1 txt="hello" wow='{a: 1, b: "hello"}'
     '''
     return {"args": args, "kwargs": kwargs}
+
+
+def arg_type(*args, **kwargs):
+    '''
+    Print out the types of the args and kwargs. This is used to test the types
+    of the args and kwargs passed down to the minion
+
+    CLI Example:
+
+    .. code-block:: bash
+
+           salt '*' test.arg_type 1 'int'
+    '''
+    ret = {'args': [], 'kwargs': {}}
+    # all the args
+    for argument in args:
+        ret['args'].append(str(type(argument)))
+
+    # all the kwargs
+    for key, val in kwargs.iteritems():
+        ret['kwargs'][key] = str(type(val))
+
+    return ret
 
 
 def arg_repr(*args, **kwargs):

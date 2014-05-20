@@ -75,7 +75,7 @@ def install(runas=None):
     '''
     # RVM dependencies on Ubuntu 10.04:
     #   bash coreutils gzip bzip2 gawk sed curl git-core subversion
-    installer = 'https://raw.github.com/wayneeseguin/rvm/master/binscripts/rvm-installer'
+    installer = 'https://raw.githubusercontent.com/wayneeseguin/rvm/master/binscripts/rvm-installer'
     ret = __salt__['cmd.run_all'](
         # the RVM installer automatically does a multi-user install when it is
         # invoked with root privileges
@@ -111,7 +111,11 @@ def install_ruby(ruby, runas=None):
     #   git-core zlib1g zlib1g-dev libssl-dev libyaml-dev libsqlite3-0
     #   libsqlite3-dev sqlite3 libxml2-dev libxslt1-dev autoconf libc6-dev
     #   libncurses5-dev automake libtool bison subversion ruby
-    return _rvm('install', ruby, runas=runas)
+    if runas and runas != 'root':
+        _rvm('autolibs disable', ruby, runas=runas)
+        return _rvm('install --disable-binary', ruby, runas=runas)
+    else:
+        return _rvm('install', ruby, runas=runas)
 
 
 def reinstall_ruby(ruby, runas=None):

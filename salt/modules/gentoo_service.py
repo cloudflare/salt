@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 '''
-Top level package command wrapper, used to translate the os detected by grains to the correct service manager
+Top level package command wrapper, used to translate the os detected by grains
+to the correct service manager
 '''
+
+# Define the module's virtual name
+__virtualname__ = 'service'
 
 
 def __virtual__():
@@ -9,7 +13,7 @@ def __virtual__():
     Only work on systems which default to systemd
     '''
     if __grains__['os'] == 'Gentoo':
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -69,6 +73,21 @@ def available(name):
         salt '*' service.available sshd
     '''
     return name in get_all()
+
+
+def missing(name):
+    '''
+    The inverse of service.available.
+    Returns ``True`` if the specified service is not available, otherwise returns
+    ``False``.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+    '''
+    return not name in get_all()
 
 
 def get_all():

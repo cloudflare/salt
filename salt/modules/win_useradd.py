@@ -16,13 +16,16 @@ try:
 except ImportError:
     HAS_WIN32NET_MODS = False
 
+# Define the module's virtual name
+__virtualname__ = 'user'
+
 
 def __virtual__():
     '''
     Set the user module if the kernel is Windows
     '''
     if HAS_WIN32NET_MODS is True and salt.utils.is_windows():
-        return 'user'
+        return __virtualname__
     return False
 
 
@@ -93,7 +96,9 @@ def setpassword(name, password):
 
         salt '*' user.setpassword name password
     '''
-    ret = __salt__['cmd.run_all']('net user {0} {1}'.format(name, password))
+    ret = __salt__['cmd.run_all'](
+        'net user {0} {1}'.format(name, password), output_loglevel='quiet'
+    )
     return ret['retcode'] == 0
 
 
@@ -322,7 +327,7 @@ def list_groups(name):
     return sorted(list(ugrp))
 
 
-def getent():
+def getent(refresh=False):
     '''
     Return the list of all info for all users
 
@@ -332,7 +337,7 @@ def getent():
 
         salt '*' user.getent
     '''
-    if 'user.getent' in __context__:
+    if 'user.getent' in __context__ and not refresh:
         return __context__['user.getent']
 
     ret = []
@@ -348,7 +353,7 @@ def getent():
                 comps = line.split()
                 users += comps
                 ##if not len(comps) > 1:
-                    #continue
+                #   continue
                 #items[comps[0].strip()] = comps[1].strip()
     #return users
     for user in users:

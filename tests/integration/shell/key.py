@@ -1,10 +1,14 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
 import os
+import yaml
 import shutil
 import tempfile
 
 # Import Salt Testing libs
 from salttesting.helpers import ensure_in_syspath
+from salttesting import skipIf
 ensure_in_syspath('../../')
 
 # Import salt libs
@@ -18,7 +22,18 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
 
     _call_binary_ = 'salt-key'
 
-    def test_list(self):
+    def test_list_accepted_args(self):
+        '''
+        test salt-key -l for accepted arguments
+        '''
+        for key in ('acc', 'pre', 'un', 'rej'):
+            # These should not trigger any error
+            data = self.run_key('-l {0}'.format(key), catch_stderr=True)
+            self.assertNotIn('error:', '\n'.join(data[1]))
+            data = self.run_key('-l foo-{0}'.format(key), catch_stderr=True)
+            self.assertIn('error:', '\n'.join(data[1]))
+
+    def test_list_all(self):
         '''
         test salt-key -L
         '''
@@ -107,6 +122,7 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         finally:
             shutil.rmtree(tempdir)
 
+    @skipIf(os.geteuid() != 0, 'you must be root to run this test')
     def test_keys_generation_no_configdir(self):
         tempdir = tempfile.mkdtemp(dir=integration.SYS_TMP_DIR)
         arg_str = '--gen-keys minibar --gen-keys-dir {0}'.format(tempdir)
@@ -137,6 +153,37 @@ class KeyTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
             )
         finally:
             shutil.rmtree(tempdir)
+
+    def test_issue_7754(self):
+        old_cwd = os.getcwd()
+        config_dir = os.path.join(integration.TMP, 'issue-7754')
+        if not os.path.isdir(config_dir):
+            os.makedirs(config_dir)
+
+        os.chdir(config_dir)
+
+        config_file_name = 'master'
+        config = yaml.load(
+            open(self.get_config_file_path(config_file_name), 'r').read()
+        )
+        config['log_file'] = 'file:///dev/log/LOG_LOCAL3'
+        open(os.path.join(config_dir, config_file_name), 'w').write(
+            yaml.dump(config, default_flow_style=False)
+        )
+        ret = self.run_script(
+            self._call_binary_,
+            '--config-dir {0} -L'.format(
+                config_dir
+            ),
+            timeout=15
+        )
+        try:
+            self.assertIn('minion', '\n'.join(ret))
+            self.assertFalse(os.path.isdir(os.path.join(config_dir, 'file:')))
+        finally:
+            os.chdir(old_cwd)
+            if os.path.isdir(config_dir):
+                shutil.rmtree(config_dir)
 
 
 if __name__ == '__main__':

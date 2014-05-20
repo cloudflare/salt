@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Managing Ruby installations and gemsets with Ruby Version Manager (RVM).
-========================================================================
+Managing Ruby installations and gemsets with Ruby Version Manager (RVM)
+=======================================================================
 
 This module is used to install and manage ruby installations and
 gemsets with RVM, the Ruby Version Manager. Different versions of ruby
@@ -188,12 +188,12 @@ def installed(name, default=False, runas=None, user=None):
     user: None
         The user to run rvm as.
 
-        ..versionadded:: 0.17.0
+        .. versionadded:: 0.17.0
     '''
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -201,7 +201,7 @@ def installed(name, default=False, runas=None, user=None):
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:
@@ -254,7 +254,7 @@ def gemset_present(name, ruby='default', runas=None, user=None):
     ret = {'name': name, 'result': None, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -262,7 +262,7 @@ def gemset_present(name, ruby='default', runas=None, user=None):
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:

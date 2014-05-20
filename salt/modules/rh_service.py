@@ -18,6 +18,9 @@ __func_alias__ = {
     'reload_': 'reload'
 }
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
 # Import upstart module if needed
 HAS_UPSTART = False
 if salt.utils.which('initctl'):
@@ -41,19 +44,20 @@ def __virtual__():
     enable = set((
         'RedHat',
         'CentOS',
-        'Scientific',
+        'ScientificLinux',
         'CloudLinux',
         'Amazon',
         'Fedora',
         'ALT',
         'OEL',
-        'SUSE  Enterprise Server'
+        'SUSE  Enterprise Server',
+        'McAfee  OS Server'
     ))
     if __grains__['os'] in enable:
         if __grains__['os'] == 'Fedora':
             if __grains__.get('osrelease', 0) > 15:
                 return False
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -112,7 +116,7 @@ def _service_is_chkconfig(name):
     Return True if the service is managed by chkconfig.
     '''
     cmdline = '/sbin/chkconfig --list {0}'.format(name)
-    return (__salt__['cmd.retcode'](cmdline) == 0)
+    return __salt__['cmd.retcode'](cmdline) == 0
 
 
 def _sysv_is_enabled(name, runlevel=None):
@@ -283,16 +287,16 @@ def get_all(limit=''):
 
 def available(name, limit=''):
     '''
-    Return True is the named service is available.  Use the ``limit`` param to
+    Return True if the named service is available.  Use the ``limit`` param to
     restrict results to services of that type.
 
     CLI Examples:
 
     .. code-block:: bash
 
-        salt '*' service.get_enabled
-        salt '*' service.get_enabled limit=upstart
-        salt '*' service.get_enabled limit=sysvinit
+        salt '*' service.available sshd
+        salt '*' service.available sshd limit=upstart
+        salt '*' service.available sshd limit=sysvinit
     '''
     if limit == 'upstart':
         return _service_is_upstart(name)
@@ -300,6 +304,31 @@ def available(name, limit=''):
         return _service_is_sysv(name)
     else:
         return _service_is_upstart(name) or _service_is_sysv(name)
+
+
+def missing(name, limit=''):
+    '''
+    The inverse of service.available.
+    Return True if the named service is not available.  Use the ``limit`` param to
+    restrict results to services of that type.
+
+    CLI Examples:
+
+    .. code-block:: bash
+
+        salt '*' service.missing sshd
+        salt '*' service.missing sshd limit=upstart
+        salt '*' service.missing sshd limit=sysvinit
+    '''
+    if limit == 'upstart':
+        return not _service_is_upstart(name)
+    elif limit == 'sysvinit':
+        return not _service_is_sysv(name)
+    else:
+        if _service_is_upstart(name) or _service_is_sysv(name):
+            return False
+        else:
+            return True
 
 
 def start(name):

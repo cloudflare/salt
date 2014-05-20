@@ -10,9 +10,12 @@ import logging
 
 # Import salt libs
 import salt.utils
-
+from salt.exceptions import CommandExecutionError, MinionError
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pkg'
 
 
 def __virtual__():
@@ -20,7 +23,7 @@ def __virtual__():
     Set the virtual pkg module if the os is Solaris
     '''
     if __grains__['os'] == 'Solaris':
-        return 'pkg'
+        return __virtualname__
     return False
 
 
@@ -75,8 +78,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
@@ -93,7 +97,7 @@ def list_pkgs(versions_as_list=False, **kwargs):
     # Package information returned two lines per package. On even-offset
     # lines, the package name is in the first column. On odd-offset lines, the
     # package version is in the second column.
-    lines = __salt__['cmd.run'](cmd).splitlines()
+    lines = __salt__['cmd.run'](cmd, output_loglevel='debug').splitlines()
     for index, line in enumerate(lines):
         if index % 2 == 0:
             name = line.split()[0].strip()
@@ -174,7 +178,7 @@ def version(*names, **kwargs):
     return __salt__['pkg_resource.version'](*names, **kwargs)
 
 
-def install(name=None, sources=None, **kwargs):
+def install(name=None, sources=None, saltenv='base', **kwargs):
     '''
     Install the passed package. Can install packages from the following
     sources::
@@ -278,11 +282,14 @@ def install(name=None, sources=None, **kwargs):
         log.warning('\'refresh\' argument not implemented for solarispkg '
                     'module')
 
-    pkg_params, pkg_type = \
-        __salt__['pkg_resource.parse_targets'](name,
-                                               kwargs.get('pkgs'),
-                                               sources,
-                                               **kwargs)
+    # pkgs is not supported, but must be passed here for API compatibility
+    pkgs = kwargs.pop('pkgs', None)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs, sources, **kwargs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
     if pkg_params is None or len(pkg_params) == 0:
         return {}
@@ -292,7 +299,7 @@ def install(name=None, sources=None, **kwargs):
         return {}
 
     if 'admin_source' in kwargs:
-        adminfile = __salt__['cp.cache_file'](kwargs['admin_source'])
+        adminfile = __salt__['cp.cache_file'](kwargs['admin_source'], saltenv)
     else:
         adminfile = _write_adminfile(kwargs)
 
@@ -306,7 +313,7 @@ def install(name=None, sources=None, **kwargs):
     for pkg in pkg_params:
         temp_cmd = cmd + '-d {0} "all"'.format(pkg)
         # Install the package{s}
-        __salt__['cmd.run_all'](temp_cmd)
+        __salt__['cmd.run'](temp_cmd, output_loglevel='debug')
 
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
@@ -315,10 +322,10 @@ def install(name=None, sources=None, **kwargs):
     if not 'admin_source' in kwargs:
         os.unlink(adminfile)
 
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
-def remove(name=None, pkgs=None, **kwargs):
+def remove(name=None, pkgs=None, saltenv='base', **kwargs):
     '''
     Remove packages with pkgrm
 
@@ -373,14 +380,18 @@ def remove(name=None, pkgs=None, **kwargs):
         salt '*' pkg.remove <package1>,<package2>,<package3>
         salt '*' pkg.remove pkgs='["foo", "bar"]'
     '''
-    pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    try:
+        pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
+
     old = list_pkgs()
     targets = [x for x in pkg_params if x in old]
     if not targets:
         return {}
 
     if 'admin_source' in kwargs:
-        adminfile = __salt__['cp.cache_file'](kwargs['admin_source'])
+        adminfile = __salt__['cp.cache_file'](kwargs['admin_source'], saltenv)
     else:
         # Set the adminfile default variables
         email = kwargs.get('email', '')
@@ -415,13 +426,13 @@ def remove(name=None, pkgs=None, **kwargs):
     # Remove the package
     cmd = '/usr/sbin/pkgrm -n -a {0} {1}'.format(adminfile,
                                                  ' '.join(targets))
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run'](cmd, output_loglevel='debug')
     # Remove the temp adminfile
     if not 'admin_source' in kwargs:
         os.unlink(adminfile)
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def purge(name=None, pkgs=None, **kwargs):

@@ -5,7 +5,6 @@ Manage users on Mac OS 10.7+
 
 # Import python libs
 try:
-    import grp
     import pwd
 except ImportError:
     pass
@@ -21,11 +20,14 @@ from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'user'
+
 
 def __virtual__():
     if __grains__.get('kernel') != 'Darwin':
         return False
-    return 'user' if _osmajor() >= 10.7 else False
+    return __virtualname__ if _osmajor() >= 10.7 else False
 
 
 def _osmajor():
@@ -53,7 +55,7 @@ def _dscl(cmd, ctype='create'):
         source, noderoot = 'localhost', '/Local/Default'
     return __salt__['cmd.run_all'](
         'dscl {0} -{1} {2}{3}'.format(source, ctype, noderoot, cmd),
-        quiet=True if ctype == 'passwd' else False
+        output_loglevel='quiet' if ctype == 'passwd' else False
     )
 
 
@@ -148,7 +150,7 @@ def delete(name, *args):
     return _dscl('/Users/{0}'.format(name), ctype='delete')['retcode'] == 0
 
 
-def getent():
+def getent(refresh=False):
     '''
     Return the list of all info for all users
 
@@ -158,7 +160,7 @@ def getent():
 
         salt '*' user.getent
     '''
-    if 'user.getent' in __context__:
+    if 'user.getent' in __context__ and not refresh:
         return __context__['user.getent']
 
     ret = []
@@ -405,24 +407,8 @@ def list_groups(name):
 
         salt '*' user.list_groups foo
     '''
-    ugrp = set()
-
-    # Add the primary user's group
-    try:
-        ugrp.add(grp.getgrgid(pwd.getpwnam(name).pw_gid).gr_name)
-    except KeyError:
-        # The user's applied default group is undefined on the system, so
-        # it does not exist
-        pass
-
-    groups = [x for x in grp.getgrall() if not x.gr_name.startswith('_')]
-
-    # Now, all other groups the user belongs to
-    for group in groups:
-        if name in group.gr_mem:
-            ugrp.add(group.gr_name)
-
-    return sorted(list(ugrp))
+    groups = [group for group in salt.utils.get_group_list(name) if not group.startswith('_')]
+    return groups
 
 
 def list_users():

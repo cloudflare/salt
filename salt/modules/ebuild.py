@@ -15,12 +15,10 @@ import re
 
 # Import salt libs
 import salt.utils
-
-log = logging.getLogger(__name__)
-
-HAS_PORTAGE = False
+from salt.exceptions import CommandExecutionError, MinionError
 
 # Import third party libs
+HAS_PORTAGE = False
 try:
     import portage
     HAS_PORTAGE = True
@@ -36,12 +34,19 @@ except ImportError:
         except ImportError:
             pass
 
+log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pkg'
+
 
 def __virtual__():
     '''
     Confirm this module is on a Gentoo based system
     '''
-    return 'pkg' if (HAS_PORTAGE and __grains__['os'] == 'Gentoo') else False
+    if HAS_PORTAGE and __grains__['os'] == 'Gentoo':
+        return __virtualname__
+    return False
 
 
 def _vartree():
@@ -80,13 +85,28 @@ def _cpv_to_version(cpv):
     return portage.versions.cpv_getversion(cpv)
 
 
-def _process_emerge_err(stderr):
+def _process_emerge_err(stdout, stderr):
     '''
     Used to parse emerge output to provide meaningful output when emerge fails
     '''
     ret = {}
     changes = {}
-    rexp = re.compile(r'([<>=][^ ]+/[^ ]+ [^\n]+)')
+    rexp = re.compile(r'^[<>=][^ ]+/[^ ]+ [^\n]+', re.M)
+
+    slot_conflicts = re.compile(r'^[^ \n]+/[^ ]+:[^ ]', re.M).findall(stderr)
+    if slot_conflicts:
+        changes['slot conflicts'] = slot_conflicts
+
+    blocked = re.compile(r'(?m)^\[blocks .+\] '
+                         r'([^ ]+/[^ ]+-[0-9]+[^ ]+)'
+                         r'.*$').findall(stdout)
+
+    unsatisfied = re.compile(
+            r'Error: The above package list contains').findall(stderr)
+
+    # If there were blocks and emerge could not resolve it.
+    if blocked and unsatisfied:
+        changes['blocked'] = blocked
 
     sections = re.split('\n\n', stderr)
     for section in sections:
@@ -98,7 +118,7 @@ def _process_emerge_err(stderr):
             changes['use'] = rexp.findall(section)
         elif 'The following mask changes' in section:
             changes['mask'] = rexp.findall(section)
-    ret['changes'] = changes
+    ret['changes'] = {'Needed changes': changes}
     return ret
 
 
@@ -143,7 +163,25 @@ def check_db(*names, **kwargs):
 
 def ex_mod_init(low):
     '''
-    Enforce a nice tree structure for /etc/portage/package.* configuration files.
+    If the config option ``ebuild.enforce_nice_config`` is set to True, this
+    module will enforce a nice tree structure for /etc/portage/package.*
+    configuration files.
+
+    .. versionadded:: 0.17.0
+       Initial automatic enforcement added when pkg is used on a Gentoo system.
+
+    .. versionchanged:: 2014.1.0-Hydrogen
+       Configure option added to make this behaviour optional, defaulting to
+       off.
+
+    .. seealso::
+       ``ebuild.ex_mod_init`` is called automatically when a state invokes a
+       pkg state on a Gentoo system.
+       :py:func:`salt.states.pkg.mod_init`
+
+       ``ebuild.ex_mod_init`` uses ``portage_config.enforce_nice_config`` to do
+       the lifting.
+       :py:func:`salt.modules.portage_config.enforce_nice_config`
 
     CLI Example:
 
@@ -151,7 +189,8 @@ def ex_mod_init(low):
 
         salt '*' pkg.ex_mod_init
     '''
-    __salt__['portage_config.enforce_nice_config']()
+    if __salt__['config.get']('ebuild.enforce_nice_config', False):
+        __salt__['portage_config.enforce_nice_config']()
     return True
 
 
@@ -212,7 +251,7 @@ def _get_upgradable():
     '''
 
     cmd = 'emerge --pretend --update --newuse --deep --ask n world'
-    out = __salt__['cmd.run_stdout'](cmd)
+    out = __salt__['cmd.run_stdout'](cmd, output_loglevel='debug')
 
     rexp = re.compile(r'(?m)^\[.+\] '
                       r'([^ ]+/[^ ]+)'    # Package string
@@ -304,8 +343,9 @@ def list_pkgs(versions_as_list=False, **kwargs):
         salt '*' pkg.list_pkgs
     '''
     versions_as_list = salt.utils.is_true(versions_as_list)
-    # 'removed' not yet implemented or not applicable
-    if salt.utils.is_true(kwargs.get('removed')):
+    # not yet implemented or not applicable
+    if any([salt.utils.is_true(kwargs.get(x))
+            for x in ('removed', 'purge_desired')]):
         return {}
 
     if 'pkg.list_pkgs' in __context__:
@@ -455,7 +495,6 @@ def install(name=None,
         {'<package>': {'old': '<old-version>',
                        'new': '<new-version>'}}
     '''
-
     log.debug('Called modules.pkg.install: {0}'.format(
         {
             'name': name,
@@ -468,10 +507,12 @@ def install(name=None,
     if salt.utils.is_true(refresh):
         refresh_db()
 
-    pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](name,
-                                                                  pkgs,
-                                                                  sources,
-                                                                  **kwargs)
+    try:
+        pkg_params, pkg_type = __salt__['pkg_resource.parse_targets'](
+            name, pkgs, sources, **kwargs
+        )
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
     # Handle version kwarg for a single package target
     if pkgs is None and sources is None:
@@ -544,12 +585,12 @@ def install(name=None,
     cmd = 'emerge --quiet --ask n {0} {1}'.format(emerge_opts, ' '.join(targets))
 
     old = list_pkgs()
-    call = __salt__['cmd.run_all'](cmd)
+    call = __salt__['cmd.run_all'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     if call['retcode'] != 0:
-        return _process_emerge_err(call['stderr'])
+        return _process_emerge_err(call['stdout'], call['stderr'])
     new = list_pkgs()
-    changes.update(__salt__['pkg_resource.find_changes'](old, new))
+    changes.update(salt.utils.compare_dicts(old, new))
     return changes
 
 
@@ -589,12 +630,12 @@ def update(pkg, slot=None, fromrepo=None, refresh=False):
 
     old = list_pkgs()
     cmd = 'emerge --update --newuse --oneshot --ask n --quiet {0}'.format(full_atom)
-    call = __salt__['cmd.run_all'](cmd)
+    call = __salt__['cmd.run_all'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     if call['retcode'] != 0:
-        return _process_emerge_err(call['stderr'])
+        return _process_emerge_err(call['stdout'], call['stderr'])
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def upgrade(refresh=True):
@@ -617,12 +658,12 @@ def upgrade(refresh=True):
 
     old = list_pkgs()
     cmd = 'emerge --update --newuse --deep --ask n --quiet world'
-    call = __salt__['cmd.run_all'](cmd)
+    call = __salt__['cmd.run_all'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     if call['retcode'] != 0:
-        return _process_emerge_err(call['stderr'])
+        return _process_emerge_err(call['stdout'], call['stderr'])
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def remove(name=None, slot=None, fromrepo=None, pkgs=None, **kwargs):
@@ -657,9 +698,12 @@ def remove(name=None, slot=None, fromrepo=None, pkgs=None, **kwargs):
         salt '*' pkg.remove <package1>,<package2>,<package3>
         salt '*' pkg.remove pkgs='["foo", "bar"]'
     '''
-    old = list_pkgs()
-    pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    try:
+        pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
+    old = list_pkgs()
     if name and not pkgs and (slot is not None or fromrepo is not None)and len(pkg_params) == 1:
         fullatom = name
         if slot is not None:
@@ -674,10 +718,10 @@ def remove(name=None, slot=None, fromrepo=None, pkgs=None, **kwargs):
         return {}
     cmd = 'emerge --unmerge --quiet --quiet-unmerge-warn --ask n' \
           '{0}'.format(' '.join(targets))
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run_all'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def purge(name=None, slot=None, fromrepo=None, pkgs=None, **kwargs):
@@ -746,9 +790,12 @@ def depclean(name=None, slot=None, fromrepo=None, pkgs=None):
 
         salt '*' pkg.depclean <package name>
     '''
-    old = list_pkgs()
-    pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    try:
+        pkg_params = __salt__['pkg_resource.parse_targets'](name, pkgs)[0]
+    except MinionError as exc:
+        raise CommandExecutionError(exc)
 
+    old = list_pkgs()
     if name and not pkgs and (slot is not None or fromrepo is not None)and len(pkg_params) == 1:
         fullatom = name
         if slot is not None:
@@ -760,10 +807,10 @@ def depclean(name=None, slot=None, fromrepo=None, pkgs=None):
         targets = [x for x in pkg_params if x in old]
 
     cmd = 'emerge --depclean --ask n --quiet {0}'.format(' '.join(targets))
-    __salt__['cmd.run_all'](cmd)
+    __salt__['cmd.run_all'](cmd, output_loglevel='debug')
     __context__.pop('pkg.list_pkgs', None)
     new = list_pkgs()
-    return __salt__['pkg_resource.find_changes'](old, new)
+    return salt.utils.compare_dicts(old, new)
 
 
 def version_cmp(pkg1, pkg2):

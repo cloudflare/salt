@@ -11,6 +11,13 @@ import salt.utils
 
 log = logging.getLogger(__name__)
 
+HAS_PSUTIL = False
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    pass
+
 
 def set_pidfile(pidfile, user):
     '''
@@ -44,6 +51,11 @@ def set_pidfile(pidfile, user):
             )
         )
         sys.exit(2)
+
+    if os.getuid() == uid:
+        # The current user already owns the pidfile. Return!
+        return
+
     try:
         os.chown(pidfile, uid, gid)
     except OSError as err:
@@ -83,3 +95,17 @@ def clean_proc(proc, wait_for_kill=10):
         # Catch AttributeError when the process dies between proc.is_alive()
         # and proc.terminate() and turns into a NoneType
         pass
+
+
+def os_is_running(pid):
+    '''
+    Use OS facilities to determine if a process is running
+    '''
+    if HAS_PSUTIL:
+        return psutil.pid_exists(pid)
+    else:
+        try:
+            os.kill(pid, 0)  # SIG 0 is the "are you alive?" signal
+            return True
+        except OSError:
+            return False

@@ -7,6 +7,7 @@ Jinja loading utils to enable a more powerful backend for jinja templates
 from os import path
 import logging
 import json
+import pprint
 from functools import wraps
 
 # Import third party libs
@@ -20,6 +21,7 @@ import yaml
 import salt
 import salt.fileclient
 from salt.utils.odict import OrderedDict
+from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 
@@ -46,15 +48,24 @@ class SaltCacheLoader(BaseLoader):
     Templates are cached like regular salt states
     and only loaded once per loader instance.
     '''
-    def __init__(self, opts, env='base', encoding='utf-8'):
+    def __init__(self, opts, saltenv='base', encoding='utf-8', env=None):
+        if env is not None:
+            salt.utils.warn_until(
+                'Boron',
+                'Passing a salt environment should be done using \'saltenv\' '
+                'not \'env\'. This functionality will be removed in Salt '
+                'Boron.'
+            )
+            # Backwards compatibility
+            saltenv = env
         self.opts = opts
-        self.env = env
+        self.saltenv = saltenv
         self.encoding = encoding
         if opts.get('file_client', 'remote') == 'local':
-            self.searchpath = opts['file_roots'][env]
+            self.searchpath = opts['file_roots'][saltenv]
         else:
-            self.searchpath = [path.join(opts['cachedir'], 'files', env)]
-        log.debug('Jinja search path: \'{0}\''.format(self.searchpath))
+            self.searchpath = [path.join(opts['cachedir'], 'files', saltenv)]
+        log.debug('Jinja search path: {0!r}'.format(self.searchpath))
         self._file_client = None
         self.cached = []
 
@@ -71,7 +82,7 @@ class SaltCacheLoader(BaseLoader):
         Cache a file from the salt master
         '''
         saltpath = path.join('salt://', template)
-        self.file_client().get_file(saltpath, '', True, self.env)
+        self.file_client().get_file(saltpath, '', True, self.saltenv)
 
     def check_cache(self, template):
         '''
@@ -128,7 +139,12 @@ class PrintableDict(OrderedDict):
     def __str__(self):
         output = []
         for key, value in self.items():
-            output.append('{0!r}: {1!r}'.format(str(key), str(value)))
+            if isinstance(value, string_types):
+                # keeps quotes around strings
+                output.append('{0!r}: {1!r}'.format(key, value))
+            else:
+                # let default output
+                output.append('{0!r}: {1!s}'.format(key, value))
         return '{' + ', '.join(output) + '}'
 
     def __repr__(self):  # pylint: disable=W0221
@@ -160,11 +176,13 @@ class SerializerExtension(Extension, object):
 
         yaml = {{ data|yaml }}
         json = {{ data|json }}
+        python = {{ data|python }}
 
     will be rendered has::
 
         yaml = {bar: 42, baz: [1, 2, 3], foo: true, qux: 2.0}
         json = {"baz": [1, 2, 3], "foo": true, "bar": 42, "qux": 2.0}
+        python = {'bar': 42, 'baz': [1, 2, 3], 'foo': True, 'qux': 2.0}
 
     Load filters
     ~~~~~~~~~~~~
@@ -253,6 +271,7 @@ class SerializerExtension(Extension, object):
         self.environment.filters.update({
             'yaml': self.format_yaml,
             'json': self.format_json,
+            'python': self.format_python,
             'load_yaml': self.load_yaml,
             'load_json': self.load_json
         })
@@ -286,11 +305,14 @@ class SerializerExtension(Extension, object):
         return Markup(yaml.dump(value, default_flow_style=True,
                                 Dumper=OrderedDictDumper).strip())
 
+    def format_python(self, value):
+        return Markup(pprint.pformat(value).strip())
+
     def load_yaml(self, value):
         if isinstance(value, TemplateModule):
             value = str(value)
         try:
-            return yaml.load(value)
+            return yaml.safe_load(value)
         except AttributeError:
             raise TemplateRuntimeError(
                     'Unable to load yaml from {0}'.format(value))
@@ -315,6 +337,7 @@ class SerializerExtension(Extension, object):
         parser.fail('Unknown format ' + parser.stream.current.value,
                     parser.stream.current.lineno)
 
+    # pylint: disable=E1120,E1121
     def parse_load(self, parser):
         filter_name = parser.stream.current.value
         lineno = next(parser.stream).lineno
@@ -394,3 +417,4 @@ class SerializerExtension(Extension, object):
                 .set_lineno(lineno)
             ).set_lineno(lineno)
         ]
+    # pylint: enable=E1120,E1121

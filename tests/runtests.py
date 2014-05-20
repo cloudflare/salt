@@ -4,12 +4,13 @@
 Discover all instances of unittest.TestCase in this directory.
 '''
 # Import python libs
+from __future__ import print_function
 import os
 import resource
 import tempfile
 
 # Import salt libs
-from integration import TestDaemon, TMP
+from integration import TestDaemon, TMP  # pylint: disable=W0403
 
 # Import Salt Testing libs
 from salttesting.parser import PNUM, print_header
@@ -31,13 +32,15 @@ try:
     if SALT_ROOT:
         os.chdir(SALT_ROOT)
 except OSError as err:
-    print 'Failed to change directory to salt\'s source: {0}'.format(err)
+    print('Failed to change directory to salt\'s source: {0}'.format(err))
 
 REQUIRED_OPEN_FILES = 3072
 
 
 class SaltTestsuiteParser(SaltCoverageTestingParser):
+    support_docker_execution = True
     support_destructive_tests_selection = True
+    source_code_basedir = SALT_ROOT
 
     def setup_additional_options(self):
         self.add_option(
@@ -91,6 +94,13 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             help='Run runner tests'
         )
         self.test_selection_group.add_option(
+            '-l',
+            '--loader',
+            default=False,
+            action='store_true',
+            help='Run loader tests'
+        )
+        self.test_selection_group.add_option(
             '-u',
             '--unit',
             '--unit-tests',
@@ -112,7 +122,7 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         if self.options.coverage and any((
                 self.options.module, self.options.client, self.options.shell,
                 self.options.unit, self.options.state, self.options.runner,
-                self.options.name, os.geteuid() != 0,
+                self.options.loader, self.options.name, os.geteuid() != 0,
                 not self.options.run_destructive)):
             self.error(
                 'No sense in generating the tests coverage report when '
@@ -124,13 +134,15 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         # Set test suite defaults if no specific suite options are provided
         if not any((self.options.module, self.options.client,
                     self.options.shell, self.options.unit, self.options.state,
-                    self.options.runner, self.options.name)):
+                    self.options.runner, self.options.loader,
+                    self.options.name)):
             self.options.module = True
             self.options.client = True
             self.options.shell = True
             self.options.unit = True
             self.options.runner = True
             self.options.state = True
+            self.options.loader = True
 
         self.start_coverage(
             branch=True,
@@ -150,17 +162,20 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         '''
         named_tests = []
         named_unit_test = []
-        for test in self.options.name:
-            if test.startswith('unit.'):
-                named_unit_test.append(test)
-                continue
-            named_tests.append(test)
+
+        if self.options.name:
+            for test in self.options.name:
+                if test.startswith('unit.'):
+                    named_unit_test.append(test)
+                    continue
+                named_tests.append(test)
 
         if (self.options.unit or named_unit_test) and not \
                 (self.options.runner or
                  self.options.state or
                  self.options.module or
                  self.options.client or
+                 self.options.loader or
                  named_tests):
             # We're either not running any of runner, state, module and client
             # tests, or, we're only running unittests by passing --unit or by
@@ -172,13 +187,12 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
             resource.RLIMIT_NOFILE
         )
         if smax_open_files < REQUIRED_OPEN_FILES:
-            print('~' * PNUM)
             print(
-                'Max open files setting is too low({0}) for running the '
+                ' * Max open files setting is too low({0}) for running the '
                 'tests'.format(smax_open_files)
             )
             print(
-                'Trying to raise the limit to {0}'.format(REQUIRED_OPEN_FILES)
+                ' * Trying to raise the limit to {0}'.format(REQUIRED_OPEN_FILES)
             )
             if hmax_open_files < 4096:
                 hmax_open_files = 4096  # Decent default?
@@ -202,7 +216,8 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         status = []
         if not any([self.options.client, self.options.module,
                     self.options.runner, self.options.shell,
-                    self.options.state, self.options.name]):
+                    self.options.state, self.options.loader,
+                    self.options.name]):
             return status
 
         with TestDaemon(self):
@@ -212,6 +227,8 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
                         continue
                     results = self.run_suite('', name, load_from_name=True)
                     status.append(results)
+            if self.options.loader:
+                status.append(self.run_integration_suite('loader', 'Loader'))
             if self.options.runner:
                 status.append(self.run_integration_suite('runners', 'Runner'))
             if self.options.module:
@@ -229,10 +246,11 @@ class SaltTestsuiteParser(SaltCoverageTestingParser):
         Execute the unit tests
         '''
         named_unit_test = []
-        for test in self.options.name:
-            if not test.startswith('unit.'):
-                continue
-            named_unit_test.append(test)
+        if self.options.name:
+            for test in self.options.name:
+                if not test.startswith('unit.'):
+                    continue
+                named_unit_test.append(test)
 
         if not self.options.unit and not named_unit_test:
             # We are not explicitly running the unit tests and none of the
@@ -264,7 +282,6 @@ def main():
     parser = SaltTestsuiteParser(
         TEST_DIR,
         xml_output_dir=XML_OUTPUT_DIR,
-        html_output_dir=HTML_OUTPUT_DIR,
         tests_logfile=os.path.join(tempfile.gettempdir(), 'salt-runtests.log')
     )
     parser.parse_args()

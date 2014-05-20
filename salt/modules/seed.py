@@ -83,7 +83,7 @@ def apply_(path, id_=None, config=None, approve_key=True, install=True):
         Install salt-minion, if absent. Default: true.
     '''
 
-    stats = __salt__['file.stats'](path, follow_symlink=True)
+    stats = __salt__['file.stats'](path, follow_symlinks=True)
     if not stats:
         return '{0} does not exist'.format(path)
     ftype = stats['type']
@@ -156,15 +156,37 @@ def _install(mpt):
     # Apply the minion config
     # Copy script into tmp
     shutil.copy(bs_, os.path.join(mpt, 'tmp'))
+    _check_resolv(mpt)
     # Exec the chroot command
     cmd = 'if type salt-minion; then exit 0; '
     cmd += 'else sh /tmp/bootstrap.sh -c /tmp; fi'
-    return (not _chroot_exec(mpt, cmd))
+    return not _chroot_exec(mpt, cmd)
+
+
+def _check_resolv(mpt):
+    '''
+    Check that the resolv.conf is present and populated
+    '''
+    resolv = os.path.join(mpt, 'etc/resolv.conf')
+    replace = False
+    if os.path.islink(resolv):
+        resolv = os.path.realpath(resolv)
+        if not os.path.isdir(os.path.dirname(resolv)):
+            os.makedirs(os.path.dirname(resolv))
+    if not os.path.isfile(resolv):
+        replace = True
+    if not replace:
+        with salt.utils.fopen(resolv, 'rb') as fp_:
+            conts = fp_.read()
+            if not 'nameserver' in conts:
+                replace = True
+    if replace:
+        shutil.copy('/etc/resolv.conf', resolv)
 
 
 def _check_install(root):
     cmd = 'if ! type salt-minion; then exit 1; fi'
-    return (not _chroot_exec(root, cmd))
+    return not _chroot_exec(root, cmd)
 
 
 def _chroot_exec(root, cmd):
@@ -185,11 +207,11 @@ def _chroot_exec(root, cmd):
     if os.path.isfile(os.path.join(root, 'bin/bash')):
         sh_ = '/bin/bash'
 
-    cmd = 'chroot {0} {1} -c \'{2}\''.format(
+    cmd = 'chroot {0} {1} -c {2!r}'.format(
         root,
         sh_,
         cmd)
-    res = __salt__['cmd.run_all'](cmd, quiet=True)
+    res = __salt__['cmd.run_all'](cmd, output_loglevel='quiet')
 
     # Kill processes running in the chroot
     for i in range(6):

@@ -1,10 +1,5 @@
 # -*- coding: utf-8 -*-
 '''
-    :codeauthor: Pedro Algarvio (pedro@algarvio.me)
-    :copyright: © 2013 by the SaltStack Team, see AUTHORS for more details.
-    :license: Apache 2.0, see LICENSE for more details.
-
-
     Logstash Logging Handler
     ========================
 
@@ -23,7 +18,7 @@
 
         logstash_udp_handler:
           host: 127.0.0.1
-          port = 9999
+          port: 9999
 
 
     On the `Logstash`_ configuration file you need something like:
@@ -116,32 +111,47 @@
 
 # Import python libs
 import os
-import zmq
 import json
 import socket
 import logging
 import logging.handlers
-from datetime import datetime
+import datetime
 
 # Import salt libs
 from salt._compat import string_types
 from salt.log.setup import LOG_LEVELS
 from salt.log.mixins import NewStyleClassMixIn
 
+# Import 3rd-party libs
+try:
+    from pytz import utc as _UTC
+    HAS_PYTZ = True
+except ImportError:
+    HAS_PYTZ = False
+
+try:
+    import zmq
+    HAS_ZMQ = True
+except ImportError:
+    HAS_ZMQ = False
+
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'logstash'
 
 
 def __virtual__():
     if not any(['logstash_udp_handler' in __opts__,
                 'logstash_zmq_handler' in __opts__]):
-        log.debug(
+        log.trace(
             'None of the required configuration sections, '
             '\'logstash_udp_handler\' and \'logstash_zmq_handler\', '
             'were found the in the configuration. Not loading the Logstash '
             'logging handlers module.'
         )
         return False
-    return 'logstash'
+    return __virtualname__
 
 
 def setup_handlers():
@@ -216,7 +226,10 @@ class LogstashFormatter(logging.Formatter, NewStyleClassMixIn):
         super(LogstashFormatter, self).__init__(fmt=None, datefmt=None)
 
     def formatTime(self, record, datefmt=None):
-        return datetime.utcfromtimestamp(record.created).isoformat()
+        timestamp = datetime.datetime.utcfromtimestamp(record.created)
+        if HAS_PYTZ:
+            return _UTC.localize(timestamp).isoformat()
+        return '{0}+00:00'.format(timestamp.isoformat())
 
     def format(self, record):
         host = socket.getfqdn()
@@ -319,5 +332,14 @@ class ZMQLogstashHander(logging.Handler, NewStyleClassMixIn):
         self.publisher.send(formatted_object)
 
     def close(self):
-        # One second to send any queued messages
-        self._context.destroy(1 * 1000)
+        if self._context is not None:
+            # One second to send any queued messages
+            if hasattr(self._context, 'destroy'):
+                self._context.destroy(1 * 1000)
+            else:
+                if getattr(self, '_publisher', None) is not None:
+                    self._publisher.setsockopt(zmq.LINGER, 1 * 1000)
+                    self._publisher.close()
+
+                if self._context.closed is False:
+                    self._context.term()

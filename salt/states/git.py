@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Interaction with Git repositories.
-==================================
+Interaction with Git repositories
+=================================
 
 Important: Before using git over ssh, make sure your remote host fingerprint
 exists in "~/.ssh/known_hosts" file. To avoid requiring password
@@ -31,14 +31,6 @@ def __virtual__():
     Only load if git is available
     '''
     return 'git' if __salt__['cmd.has_exec']('git') else False
-
-
-def __ls_remote__(name, branch, user, cwd):
-    '''
-    Returns the upstream hash for any given URL and branch.
-    '''
-    cmd = "git ls-remote -h " + name + " " + branch + " | cut -f 1"
-    return __salt__['cmd.run_stdout'](cmd, cwd, runas=user)
 
 
 def latest(name,
@@ -119,11 +111,17 @@ def latest(name,
         passed to the ``unless`` option returns false
     '''
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
+
+    # Check to make sure rev and mirror/bare are not both in use
+    if rev and (mirror or bare):
+        return _fail(ret, ('"rev" is not compatible with the "mirror" and '
+                           '"bare" arguments'))
+
     if not target:
         return _fail(ret, '"target" option is required')
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -131,7 +129,7 @@ def latest(name,
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:
@@ -168,12 +166,15 @@ def latest(name,
             current_rev = __salt__['git.revision'](target, user=user)
 
             # handle the case where a branch was provided for rev
-            remote_rev = None
+            remote_rev, new_rev = None, None
             branch = __salt__['git.current_branch'](target, user=user)
             # We're only interested in the remote branch if a branch
             # (instead of a hash, for example) was provided for rev.
             if len(branch) > 0 and branch == rev:
-                remote_rev = __ls_remote__(name, branch, user, target)
+                remote_rev = __salt__['git.ls_remote'](target,
+                                                       repository=name,
+                                                       branch=branch, user=user,
+                                                       identity=identity)
 
             # only do something, if the specified rev differs from the
             # current_rev and remote_rev
@@ -182,6 +183,7 @@ def latest(name,
             else:
 
                 if __opts__['test']:
+                    ret['changes'] = {'old': current_rev, 'new': new_rev}
                     return _neutral_test(
                         ret,
                         ('Repository {0} update is probably required (current '
@@ -212,7 +214,7 @@ def latest(name,
                                           identity=identity)
                 elif rev:
 
-                    cmd = "git rev-parse " + rev
+                    cmd = 'git rev-parse {0}^{{commit}}'.format(rev)
                     retcode = __salt__['cmd.retcode'](cmd,
                                                       cwd=target,
                                                       runas=user)
@@ -268,8 +270,8 @@ def latest(name,
                     shutil.rmtree(target)
             # git clone is required, but target exists and is non-empty
             elif os.listdir(target):
-                return _fail(ret, 'Directory exists, is non-empty, and force '
-                    'option not in use')
+                return _fail(ret, 'Directory \'{0}\' exists, is non-empty, and '
+                             'force option not in use'.format(target))
 
         # git clone is required
         log.debug(
@@ -347,7 +349,7 @@ def present(name, bare=True, runas=None, user=None, force=False):
     ret = {'name': name, 'result': True, 'comment': '', 'changes': {}}
 
     salt.utils.warn_until(
-        'Hydrogen',
+        'Lithium',
         'Please remove \'runas\' support at this stage. \'user\' support was '
         'added in 0.17.0',
         _dont_call_warnings=True
@@ -355,7 +357,7 @@ def present(name, bare=True, runas=None, user=None, force=False):
     if runas:
         # Warn users about the deprecation
         ret.setdefault('warnings', []).append(
-            'The \'runas\' argument is being deprecated in favor or \'user\', '
+            'The \'runas\' argument is being deprecated in favor of \'user\', '
             'please update your state files.'
         )
     if user is not None and runas is not None:

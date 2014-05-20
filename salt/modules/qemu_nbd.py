@@ -14,9 +14,6 @@ import tempfile
 import time
 import logging
 
-# Import third party tools
-import yaml
-
 # Import salt libs
 import salt.utils
 import salt.crypt
@@ -128,8 +125,6 @@ def clear(mnt):
 
         salt '*' qemu_nbd.clear '{"/mnt/foo": "/dev/nbd0p1"}'
     '''
-    if isinstance(mnt, str):
-        mnt = yaml.load(mnt)
     ret = {}
     nbds = set()
     for m_pt, dev in mnt.items():

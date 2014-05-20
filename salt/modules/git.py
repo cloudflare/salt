@@ -121,7 +121,7 @@ def current_branch(cwd, user=None):
 
         salt '*' git.current_branch /path/to/repo
     '''
-    cmd = r'git branch --list | grep "^*\ " | cut -d " " -f 2 | ' + \
+    cmd = r'git branch | grep "^*\ " | cut -d " " -f 2 | ' + \
         'grep -v "(detached"'
 
     return __salt__['cmd.run_stdout'](cmd, cwd=cwd, runas=user)
@@ -843,3 +843,35 @@ def config_get(cwd, setting_name, user=None):
     _check_git()
 
     return _git_run('git config {0}'.format(setting_name), cwd=cwd, runas=user)
+
+
+def ls_remote(cwd, repository="origin", branch="master", user=None, identity=None):
+    '''
+    Returns the upstream hash for any given URL and branch.
+
+    cwd
+        The path to the Git repository
+
+    repository: origin
+        The name of the repository to get the revision from. Can be the name of
+        a remote, an URL, etc.
+
+    branch: master
+        The name of the branch to get the revision from.
+
+    user : none
+        run git as a user other than what the minion runs as
+
+    identity : none
+        a path to a private key to use over ssh
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' git.ls_remote /pat/to/repo origin master
+
+    '''
+    _check_git()
+    cmd = "git ls-remote -h " + repository + " " + branch + " | cut -f 1"
+    return _git_run(cmd, cwd=cwd, runas=user, identity=identity)

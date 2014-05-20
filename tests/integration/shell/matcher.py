@@ -1,5 +1,10 @@
+# -*- coding: utf-8 -*-
+
 # Import python libs
+import os
 import yaml
+import shutil
+import tempfile
 
 # Import Salt Testing libs
 from salttesting.helpers import ensure_in_syspath
@@ -173,12 +178,6 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertIn('minion', data)
         self.assertIn('sub_minion', data)
 
-    def test_exsel(self):
-        data = self.run_salt('-X test.ping test.ping')
-        data = '\n'.join(data)
-        self.assertIn('minion', data)
-        self.assertIn('sub_minion', data)
-
     def test_ipcidr(self):
         subnets_data = self.run_salt('--out yaml \'*\' network.subnets')
         yaml_data = yaml.load('\n'.join(subnets_data))
@@ -203,7 +202,7 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         '''
         Test to see if we're supporting --doc
         '''
-        data = self.run_salt('-d \* user')
+        data = self.run_salt(r'-d \* user')
         self.assertIn('user.add:', data)
 
     def test_salt_documentation_arguments_not_assumed(self):
@@ -220,6 +219,45 @@ class MatchTest(integration.ShellCase, integration.ShellCaseCommonTestsMixIn):
         self.assertIn('user.add:', data)
         data = self.run_salt('\'*\' sys.doc user')
         self.assertIn('user.add:', data)
+
+    def test_issue_7754(self):
+        old_cwd = os.getcwd()
+        config_dir = os.path.join(integration.TMP, 'issue-7754')
+        if not os.path.isdir(config_dir):
+            os.makedirs(config_dir)
+
+        os.chdir(config_dir)
+
+        config_file_name = 'master'
+        config = yaml.load(
+            open(self.get_config_file_path(config_file_name), 'r').read()
+        )
+        config['log_file'] = 'file:///dev/log/LOG_LOCAL3'
+        open(os.path.join(config_dir, config_file_name), 'w').write(
+            yaml.dump(config, default_flow_style=False)
+        )
+        ret = self.run_script(
+            self._call_binary_,
+            '--config-dir {0} minion test.ping'.format(
+                config_dir
+            ),
+            timeout=15,
+            catch_stderr=True,
+            with_retcode=True
+        )
+        try:
+            self.assertIn('minion', '\n'.join(ret[0]))
+            self.assertFalse(os.path.isdir(os.path.join(config_dir, 'file:')))
+        except AssertionError:
+            # We now fail when we're unable to properly set the syslog logger
+            self.assertIn(
+                'Failed to setup the Syslog logging handler', '\n'.join(ret[1])
+            )
+            self.assertEqual(ret[2], 2)
+        finally:
+            os.chdir(old_cwd)
+            if os.path.isdir(config_dir):
+                shutil.rmtree(config_dir)
 
 
 if __name__ == '__main__':

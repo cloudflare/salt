@@ -1,8 +1,6 @@
 # -*- coding: utf-8 -*-
 '''
-Cobbler Pillar
-==============
-A pillar module to pull data from Cobbler via its API into the pillar dictionary.
+A module to pull data from Cobbler via its API into the Pillar dictionary
 
 
 Configuring the Cobbler ext_pillar
@@ -15,8 +13,8 @@ modules.
 
   ext_pillar:
   - cobbler:
-    - key: cobbler # Nest results within this key. By default, values are not nested.
-    - only: [parameters] # Add only these keys to pillar.
+      key: cobbler # Nest results within this key. By default, values are not nested.
+      only: [parameters] # Add only these keys to pillar.
 
   cobbler.url: https://example.com/cobbler_api #default is http://localhost/cobbler_api
   cobbler.user: username # default is no username

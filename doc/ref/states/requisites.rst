@@ -153,10 +153,31 @@ Use
 The ``use`` requisite is used to inherit the arguments passed in another
 id declaration. This is useful when many files need to have the same defaults.
 
+.. code-block:: yaml
+
+    /etc/foo.conf:
+      file.managed:
+        - source: salt://foo.conf
+        - template: jinja
+        - mkdirs: True
+        - user: apache
+        - group: apache
+        - mode: 755
+
+    /etc/bar.conf
+      file.managed:
+        - source: salt://bar.conf
+        - use:
+          - file: /etc/foo.conf
+
 The ``use`` statement was developed primarily for the networking states but
 can be used on any states in Salt. This made sense for the networking state
 because it can define a long list of options that need to be applied to
 multiple network interfaces.
+
+The ``use`` statement does not inherit the requisites arguments of the
+targeted state. This means also a chain of ``use`` requisites would not
+inherit inherited options.
 
 .. _requisites-require-in:
 

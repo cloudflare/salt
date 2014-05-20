@@ -14,6 +14,7 @@ so that any external authentication system can be used inside of Salt
 # 6. Interface to verify tokens
 
 # Import python libs
+from __future__ import print_function
 import os
 import hashlib
 import time
@@ -33,7 +34,7 @@ log = logging.getLogger(__name__)
 
 class LoadAuth(object):
     '''
-    Wrap the authentication system to handle periphrial components
+    Wrap the authentication system to handle peripheral components
     '''
     def __init__(self, opts):
         self.opts = opts
@@ -119,7 +120,7 @@ class LoadAuth(object):
                  'name': fcall['args'][0],
                  'eauth': load['eauth'],
                  'token': tok}
-        with salt.utils.fopen(t_path, 'w+') as fp_:
+        with salt.utils.fopen(t_path, 'w+b') as fp_:
             fp_.write(self.serial.dumps(tdata))
         return tdata
 
@@ -131,7 +132,7 @@ class LoadAuth(object):
         t_path = os.path.join(self.opts['token_dir'], tok)
         if not os.path.isfile(t_path):
             return {}
-        with salt.utils.fopen(t_path, 'r') as fp_:
+        with salt.utils.fopen(t_path, 'rb') as fp_:
             tdata = self.serial.loads(fp_.read())
         rm_tok = False
         if 'expire' not in tdata:
@@ -165,11 +166,11 @@ class Authorize(object):
         '''
         Gather and create the autorization data sets
         '''
-        auth_data = [self.opts['external_auth']]
-        for auth_back in self.opts.get('external_auth_sources'):
-            fstr = '{0}.perms'.format(auth_back)
-            if fstr in self.loadauth.auth:
-                auth_data.append(getattr(self.loadauth.auth)())
+        auth_data = self.opts['external_auth']
+        #for auth_back in self.opts.get('external_auth_sources', []):
+        #    fstr = '{0}.perms'.format(auth_back)
+        #    if fstr in self.loadauth.auth:
+        #        auth_data.append(getattr(self.loadauth.auth)())
         return auth_data
 
     def token(self, adata, load):
@@ -189,8 +190,9 @@ class Authorize(object):
             log.warning('Authentication failure of type "token" occurred.')
             yield {}
         for sub_auth in adata:
-            if token['eauth'] not in adata:
-                continue
+            for sub_adata in adata:
+                if token['eauth'] not in adata:
+                    continue
             if not ((token['name'] in adata[token['eauth']]) |
                     ('*' in adata[token['eauth']])):
                 continue
@@ -201,7 +203,7 @@ class Authorize(object):
         '''
         Determine if the given eauth is valid and yield the adata
         '''
-        for sub_auth in adata:
+        for sub_auth in [adata]:
             if load['eauth'] not in sub_auth:
                 continue
             try:
@@ -226,7 +228,7 @@ class Authorize(object):
         '''
         if load.get('eauth'):
             sub_auth = sub_auth[load['eauth']]
-        good = self.ckminions.any_check(
+        good = self.ckminions.any_auth(
                 form,
                 sub_auth[name] if name in sub_auth else sub_auth['*'],
                 load.get('fun', None),
@@ -244,13 +246,14 @@ class Authorize(object):
         authorization
         '''
         adata = self.auth_data()
+        good = False
         if load.get('token', False):
             good = False
             for sub_auth in self.token(adata, load):
                 if sub_auth:
                     if self.rights_check(
                             form,
-                            sub_auth['sub_auth'],
+                            adata[sub_auth['token']['eauth']],
                             sub_auth['token']['name'],
                             load,
                             sub_auth['token']['eauth']):
@@ -287,6 +290,13 @@ class Resolver(object):
     def __init__(self, opts):
         self.opts = opts
         self.auth = salt.loader.auth(opts)
+
+    def _send_token_request(self, load):
+        sreq = salt.payload.SREQ(
+            'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
+            )
+        tdata = sreq.send('clear', load)
+        return tdata
 
     def cli(self, eauth):
         '''
@@ -326,43 +336,33 @@ class Resolver(object):
         '''
         load['cmd'] = 'mk_token'
         load['eauth'] = eauth
-        sreq = salt.payload.SREQ(
-                'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
-                )
-        tdata = sreq.send('clear', load)
+        tdata = self._send_token_request(load)
         if 'token' not in tdata:
             return tdata
+        oldmask = os.umask(0177)
         try:
             with salt.utils.fopen(self.opts['token_file'], 'w+') as fp_:
                 fp_.write(tdata['token'])
         except (IOError, OSError):
             pass
+        finally:
+            os.umask(oldmask)
         return tdata
 
     def mk_token(self, load):
         '''
-        Request a token fromt he master
+        Request a token from the master
         '''
         load['cmd'] = 'mk_token'
-        sreq = salt.payload.SREQ(
-                'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
-                )
-        tdata = sreq.send('clear', load)
-        if 'token' not in tdata:
-            return tdata
+        tdata = self._send_token_request(load)
         return tdata
 
     def get_token(self, token):
         '''
-        Request a token fromt he master
+        Request a token from the master
         '''
         load = {}
         load['token'] = token
         load['cmd'] = 'get_token'
-        sreq = salt.payload.SREQ(
-                'tcp://{0[interface]}:{0[ret_port]}'.format(self.opts),
-                )
-        tdata = sreq.send('clear', load)
-        if 'token' not in tdata:
-            return tdata
+        tdata = self._send_token_request(load)
         return tdata

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 '''
+Control the Salt command interface
+==================================
+
 The Salt state is used to control the salt command interface. This state is
 intended for use primarily from the state runner from the master.
 
@@ -12,7 +15,7 @@ The salt.state declaration can call out a highstate or a list of sls:
           - apache
           - django
           - core
-        - env: prod
+        - saltenv: prod
 
     databasees:
       salt.state:
@@ -29,12 +32,15 @@ import salt.utils
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'salt'
+
 
 def __virtual__():
     '''
     Named salt
     '''
-    return 'salt'
+    return __virtualname__
 
 
 def state(
@@ -74,8 +80,8 @@ def state(
         A group of sls files to execute. This can be defined as a single string
         containing a single sls file, or a list of sls files
 
-    env
-        The default environment to pull sls files from
+    saltenv
+        The default salt environment to pull sls files from
 
     ssh
         Set to `True` to use the ssh client instaed of the standard salt client
@@ -90,6 +96,17 @@ def state(
            'changes': {},
            'comment': '',
            'result': True}
+    if env is not None:
+        msg = (
+            'Passing a salt environment should be done using \'saltenv\' not '
+            '\'env\'. This warning will go away in Salt Boron and this '
+            'will be the default and expected behaviour. Please update your '
+            'state files.'
+        )
+        salt.utils.warn_until('Boron', msg)
+        ret.setdefault('warnings', []).append(msg)
+        # No need to set __env__ = env since that's done in the state machinery
+
     cmd_kw = {'arg': []}
     if 'expr_form' in kwargs and not tgt_type:
         tgt_type = kwargs['expr_form']
@@ -110,8 +127,8 @@ def state(
         return ret
     if test:
         cmd_kw['arg'].append('test={0}'.format(test))
-    if env:
-        cmd_kw['arg'].append('env={0}'.format(env))
+    if __env__ != 'base':
+        cmd_kw['arg'].append('saltenv={0}'.format(__env__))
     if ret:
         cmd_kw['ret'] = ret
     if __opts__['test'] is True:
@@ -121,22 +138,54 @@ def state(
         ret['result'] = None
         return ret
     cmd_ret = __salt__['saltutil.cmd'](tgt, fun, **cmd_kw)
-    ret['changes'] = cmd_ret
+
+    changes = {}
     fail = set()
+    failures = {}
+    no_change = set()
     if isinstance(fail_minions, str):
         fail_minions = [fail_minions]
-    for minion, m_ret in cmd_ret.items():
-        if minion in fail_minions:
-            continue
-        m_state = salt.utils.check_state_result(m_ret)
+
+    for minion, mdata in cmd_ret.iteritems():
+        if mdata['out'] != 'highstate':
+            log.warning("Output from salt state not highstate")
+        m_ret = mdata['ret']
+        m_state = salt.utils.check_state_result({minion: m_ret})
         if not m_state:
-            fail.add(minion)
+            if minion not in fail_minions:
+                fail.add(minion)
+            failures[minion] = m_ret
+            continue
+        for state_item in m_ret.itervalues():
+            if state_item['changes']:
+                changes[minion] = m_ret
+                break
+        else:
+            no_change.add(minion)
+
+    if changes:
+        ret['changes'] = {'out': 'highstate', 'ret': changes}
     if fail:
         ret['result'] = False
         ret['comment'] = 'Run failed on minions: {0}'.format(', '.join(fail))
-        return ret
-    ret['comment'] = 'States ran successfully on {0}'.format(
-            ', '.join(cmd_ret))
+    else:
+        ret['comment'] = 'States ran successfully.'
+        if changes:
+            ret['comment'] += ' Updating {0}.'.format(', '.join(changes))
+        if no_change:
+            ret['comment'] += ' Without changing {0}.'.format(', '.join(no_change))
+    if failures:
+        ret['comment'] += '\nFailures:\n'
+        for minion, failure in failures.iteritems():
+            ret['comment'] += '\n'.join(
+                    (' '*4 + l)
+                    for l in salt.output.out_format(
+                        {minion: failure},
+                        'highstate',
+                        __opts__,
+                        ).splitlines()
+                    )
+            ret['comment'] += '\n'
     return ret
 
 

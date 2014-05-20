@@ -6,15 +6,45 @@ Support for DEB packages
 # Import python libs
 import logging
 
+# Import salt libs
+import salt.utils
 
 log = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'lowpkg'
 
 
 def __virtual__():
     '''
     Confirm this module is on a Debian based system
     '''
-    return 'lowpkg' if __grains__['os_family'] == 'Debian' else False
+    return __virtualname__ if __grains__['os_family'] == 'Debian' else False
+
+
+def unpurge(*packages):
+    '''
+    Change package selection for each package specified to 'install'
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' lowpkg.unpurge curl
+    '''
+    if not packages:
+        return {}
+    old = __salt__['pkg.list_pkgs'](purge_desired=True)
+    ret = {}
+    __salt__['cmd.run'](
+        ['dpkg', '--set-selections'],
+        stdin=r'\n'.join(['{0} install'.format(x) for x in packages]),
+        python_shell=False,
+        output_loglevel='debug'
+    )
+    __context__.pop('pkg.list_pkgs', None)
+    new = __salt__['pkg.list_pkgs'](purge_desired=True)
+    return salt.utils.compare_dicts(old, new)
 
 
 def list_pkgs(*packages):

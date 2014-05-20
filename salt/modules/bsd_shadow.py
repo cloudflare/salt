@@ -9,9 +9,12 @@ try:
 except ImportError:
     pass
 
+# Define the module's virtual name
+__virtualname__ = 'shadow'
+
 
 def __virtual__():
-    return 'shadow' if 'BSD' in __grains__.get('os', '') else False
+    return __virtualname__ if 'BSD' in __grains__.get('os', '') else False
 
 
 def default_hash():
@@ -93,7 +96,7 @@ def set_password(name, password):
         cmd = 'pw user mod {0} -H 0'.format(name)
         stdin = password
     else:
-        cmd = 'usermod -p \'{0}\' {1}'.format(password, name)
+        cmd = 'usermod -p {0!r} {1}'.format(password, name)
         stdin = None
-    __salt__['cmd.run'](cmd, stdin=stdin)
+    __salt__['cmd.run'](cmd, stdin=stdin, output_loglevel='quiet')
     return info(name)['passwd'] == password

@@ -13,10 +13,11 @@ import hmac
 import shutil
 import hashlib
 import logging
+import traceback
 
 # Import third party libs
 try:
-    from M2Crypto import RSA
+    from M2Crypto import RSA, EVP
     from Crypto.Cipher import AES
 except ImportError:
     # No need for crypt in local mode
@@ -40,6 +41,34 @@ def dropfile(cachedir, user=None):
     '''
     dfnt = os.path.join(cachedir, '.dfnt')
     dfn = os.path.join(cachedir, '.dfn')
+
+    def ready():
+        '''
+        Because MWorker._update_aes uses second-precision mtime
+        to detect changes to the file, we must avoid writing two
+        versions with the same mtime.
+
+        Note that this only makes rapid updates in serial safe: concurrent
+        updates could still both pass this check and then write two different
+        keys with the same mtime.
+        '''
+        try:
+            stats = os.stat(dfn)
+        except os.error:
+            # Not there, go ahead and write it
+            return True
+        else:
+            if stats.st_mtime == time.time():
+                # The mtime is the current time, we must
+                # wait until time has moved on.
+                return False
+            else:
+                return True
+
+    while not ready():
+        log.warning('Waiting before writing {0}'.format(dfn))
+        time.sleep(1)
+
     aes = Crypticle.generate_key_string()
     mask = os.umask(191)
     with salt.utils.fopen(dfnt, 'w+') as fp_:
@@ -49,10 +78,10 @@ def dropfile(cachedir, user=None):
             import pwd
             uid = pwd.getpwnam(user).pw_uid
             os.chown(dfnt, uid, -1)
-            shutil.move(dfnt, dfn)
         except (KeyError, ImportError, OSError, IOError):
             pass
 
+    shutil.move(dfnt, dfn)
     os.umask(mask)
 
 
@@ -83,6 +112,35 @@ def gen_keys(keydir, keyname, keysize, user=None):
     return priv
 
 
+def sign_message(privkey_path, message):
+    '''
+    Use M2Crypto's EVP ("Envelope") functions to sign a message.  Returns the signature.
+    '''
+    log.debug('salt.crypt.sign_message: Loading private key')
+    evp_rsa = EVP.load_key(privkey_path)
+    evp_rsa.sign_init()
+    evp_rsa.sign_update(message)
+    log.debug('salt.crypt.sign_message: Signing message.')
+    return evp_rsa.sign_final()
+
+
+def verify_signature(pubkey_path, message, signature):
+    '''
+    Use M2Crypto's EVP ("Envelope") functions to verify the signature on a message.
+    Returns True for valid signature.
+    '''
+    # Verify that the signature is valid
+    log.debug('salt.crypt.verify_signature: Loading public key')
+    pubkey = RSA.load_pub_key(pubkey_path)
+    verify_evp = EVP.PKey()
+    verify_evp.assign_rsa(pubkey)
+    verify_evp.verify_init()
+    verify_evp.verify_update(message)
+    log.debug('salt.crypt.verify_signature: Verifying signature')
+    result = verify_evp.verify_final(signature)
+    return result
+
+
 class MasterKeys(dict):
     '''
     The Master Keys class is used to manage the public key pair used for
@@ -107,7 +165,7 @@ class MasterKeys(dict):
             log.info('Generating keys: {0}'.format(self.opts['pki_dir']))
             gen_keys(self.opts['pki_dir'],
                      'master',
-                     4096,
+                     self.opts['keysize'],
                      self.opts.get('user'))
             key = RSA.load_key(self.rsa_path)
         return key
@@ -161,10 +219,17 @@ class Auth(object):
             log.info('Generating keys: {0}'.format(self.opts['pki_dir']))
             gen_keys(self.opts['pki_dir'],
                      'minion',
-                     4096,
+                     self.opts['keysize'],
                      self.opts.get('user'))
             key = RSA.load_key(self.rsa_path)
         return key
+
+    def gen_token(self, clear_tok):
+        '''
+        Encrypt a string with the minion private key to verify identity
+        with the master.
+        '''
+        return self.get_keys().private_encrypt(clear_tok, 5)
 
     def minion_sign_in_payload(self):
         '''
@@ -201,7 +266,14 @@ class Auth(object):
         Pass in the encrypted aes key.
         Returns the decrypted aes seed key, a string
         '''
-        log.debug('Decrypting the current master AES key')
+        if self.opts.get('auth_trb', False):
+            log.warning(
+                    'Auth Called: {0}'.format(
+                        ''.join(traceback.format_stack())
+                        )
+                    )
+        else:
+            log.debug('Decrypting the current master AES key')
         key = self.get_keys()
         key_str = key.private_decrypt(payload['aes'], RSA.pkcs1_oaep_padding)
         if 'sig' in payload:
@@ -272,10 +344,16 @@ class Auth(object):
                 True,
                 self.opts['ipv6']
             )
-        except SaltClientError:
+        except SaltClientError as e:
             if safe:
+                log.warning('SaltClientError: {0}'.format(e))
                 return 'retry'
             raise SaltClientError
+
+        if self.opts['master_ip'] not in self.opts['master_uri']:
+            self.opts['master_uri'] = (self.opts['master_uri'].replace(
+                self.opts['master_uri'].split(':')[1][2:],
+                self.opts['master_ip']))
 
         sreq = salt.payload.SREQ(
             self.opts['master_uri'],
@@ -285,22 +363,32 @@ class Auth(object):
                 self.minion_sign_in_payload(),
                 timeout=timeout
             )
-        except SaltReqTimeoutError:
+        except SaltReqTimeoutError as e:
             if safe:
+                log.warning('SaltReqTimeoutError: {0}'.format(e))
                 return 'retry'
             raise SaltClientError
 
         if 'load' in payload:
             if 'ret' in payload['load']:
                 if not payload['load']['ret']:
-                    log.critical(
-                        'The Salt Master has rejected this minion\'s public '
-                        'key!\nTo repair this issue, delete the public key '
-                        'for this minion on the Salt Master and restart this '
-                        'minion.\nOr restart the Salt Master in open mode to '
-                        'clean out the keys. The Salt Minion will now exit.'
-                    )
-                    sys.exit(0)
+                    if self.opts['rejected_retry']:
+                        log.error(
+                            'The Salt Master has rejected this minion\'s public '
+                            'key.\nTo repair this issue, delete the public key '
+                            'for this minion on the Salt Master.\nThe Salt '
+                            'Minion will attempt to to re-authenicate.'
+                        )
+                        return 'retry'
+                    else:
+                        log.critical(
+                            'The Salt Master has rejected this minion\'s public '
+                            'key!\nTo repair this issue, delete the public key '
+                            'for this minion on the Salt Master and restart this '
+                            'minion.\nOr restart the Salt Master in open mode to '
+                            'clean out the keys. The Salt Minion will now exit.'
+                        )
+                        sys.exit(0)
                 else:
                     log.error(
                         'The Salt Master has cached the public key for this '
@@ -439,7 +527,7 @@ class SAuth(Auth):
         '''
         while True:
             creds = self.sign_in(
-                self.opts.get('_auth_timeout', 60),
+                self.opts['auth_timeout'],
                 self.opts.get('_safe_auth', True)
             )
             if creds == 'retry':
@@ -451,10 +539,3 @@ class SAuth(Auth):
                 continue
             break
         return Crypticle(self.opts, creds['aes'])
-
-    def gen_token(self, clear_tok):
-        '''
-        Encrypt a string with the minion private key to verify identity
-        with the master.
-        '''
-        return self.get_keys().private_encrypt(clear_tok, 5)

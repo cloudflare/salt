@@ -246,12 +246,7 @@ def useradd(pwfile, user, password, opts=''):
         salt '*' apache.useradd /etc/httpd/htpasswd larry badpassword
         salt '*' apache.useradd /etc/httpd/htpasswd larry badpass opts=ns
     '''
-    if not os.path.exists(pwfile):
-        opts += 'c'
-
-    cmd = 'htpasswd -b{0} {1} {2} {3}'.format(opts, pwfile, user, password)
-    out = __salt__['cmd.run'](cmd).splitlines()
-    return out
+    return __salt__['webutil.useradd'](pwfile, user, password, opts)
 
 
 def userdel(pwfile, user):
@@ -264,12 +259,7 @@ def userdel(pwfile, user):
 
         salt '*' apache.userdel /etc/httpd/htpasswd larry
     '''
-    if not os.path.exists(pwfile):
-        return 'Error: The specified htpasswd file does not exist'
-
-    cmd = 'htpasswd -D {0} {1}'.format(pwfile, user)
-    out = __salt__['cmd.run'](cmd).splitlines()
-    return out
+    return __salt__['webutil.userdel'](pwfile, user)
 
 
 def check_site_enabled(site):
@@ -287,7 +277,7 @@ def check_site_enabled(site):
     '''
     if os.path.islink('/etc/apache2/sites-enabled/{0}'.format(site)):
         return True
-    elif (site == 'default' and os.path.islink('/etc/apache2/sites-enabled/000-{0}'.format(site))):
+    elif site == 'default' and os.path.islink('/etc/apache2/sites-enabled/000-{0}'.format(site)):
         return True
     else:
         return False
@@ -307,10 +297,10 @@ def a2ensite(site):
         salt '*' apache.a2ensite example.com
     '''
     ret = {}
-    command = 'a2ensite {0}'.format(site)
+    command = ['a2ensite', site]
 
     try:
-        status = __salt__['cmd.retcode'](command)
+        status = __salt__['cmd.retcode'](command, python_shell=False)
     except Exception as e:
         return e
 
@@ -341,10 +331,10 @@ def a2dissite(site):
         salt '*' apache.a2dissite example.com
     '''
     ret = {}
-    command = 'a2dissite {0}'.format(site)
+    command = ['a2dissite', site]
 
     try:
-        status = __salt__['cmd.retcode'](command)
+        status = __salt__['cmd.retcode'](command, python_shell=False)
     except Exception as e:
         return e
 

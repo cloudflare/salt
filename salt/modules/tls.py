@@ -38,7 +38,7 @@ def __virtual__():
     Only load this module if the ca config options are set
     '''
     if HAS_SSL:
-        return 'tls'
+        return True
     return False
 
 
@@ -141,7 +141,7 @@ def create_ca(
         C='US',
         ST='Utah',
         L='Salt Lake City',
-        O='Salt Stack',
+        O='SaltStack',
         OU=None,
         emailAddress='xyz@pdq.net'):
     '''
@@ -162,7 +162,7 @@ def create_ca(
     L
         locality, default is "Centerville", the city where SaltStack originated
     O
-        organization, default is "Salt Stack"
+        organization, default is "SaltStack"
     OU
         organizational unit, default is None
     emailAddress
@@ -174,12 +174,13 @@ def create_ca(
 
     If the following values were set::
 
-        ca.cert_base_path='/etc/pki/koji'
+        ca.cert_base_path='/etc/pki'
         ca_name='koji'
 
-    the resulting CA would be written in the following location::
+    the resulting CA, and corresponding key, would be written in the following location::
 
         /etc/pki/koji/koji_ca_cert.crt
+        /etc/pki/koji/koji_ca_cert.key
 
     CLI Example:
 
@@ -260,13 +261,20 @@ def create_ca(
 
     _write_cert_to_database(ca_name, ca)
 
-    return ('Created CA "{0}", certificate is located at '
-            '"{1}/{2}/{3}_ca_cert.crt"').format(
+    ret = ('Created Private Key: "{1}/{2}/{3}_ca_cert.key." ').format(
                     ca_name,
                     _cert_base_path(),
                     ca_name,
                     ca_name
                     )
+    ret += ('Created CA "{0}": "{1}/{2}/{3}_ca_cert.crt."').format(
+                    ca_name,
+                    _cert_base_path(),
+                    ca_name,
+                    ca_name
+                    )
+
+    return ret
 
 
 def create_csr(
@@ -276,7 +284,7 @@ def create_csr(
         C='US',
         ST='Utah',
         L='Salt Lake City',
-        O='Salt Stack',
+        O='SaltStack',
         OU=None,
         emailAddress='xyz@pdq.net'):
     '''
@@ -296,7 +304,7 @@ def create_csr(
     L
         locality, default is "Centerville", the city where SaltStack originated
     O
-        organization, default is "Salt Stack"
+        organization, default is "SaltStack"
         NOTE: Must the same as CA certificate or an error will be raised
     OU
         organizational unit, default is None
@@ -308,7 +316,7 @@ def create_csr(
 
     If the following values were set::
 
-        ca.cert_base_path='/etc/pki/koji'
+        ca.cert_base_path='/etc/pki'
         ca_name='koji'
         CN='test.egavas.org'
 
@@ -377,13 +385,19 @@ def create_csr(
             )
     csr.close()
 
-    return ('Created CSR for "{0}", request is located at '
-            '"{1}/{2}/certs/{3}.csr"').format(
+    ret = 'Created Private Key: "{0}/{1}/certs/{2}.key." '.format(
+                    _cert_base_path(),
+                    ca_name,
+                    CN
+                    )
+    ret += 'Created CSR for "{0}": "{1}/{2}/certs/{3}.csr."'.format(
                     ca_name,
                     _cert_base_path(),
                     ca_name,
                     CN
                     )
+
+    return ret
 
 
 def create_self_signed_cert(
@@ -394,7 +408,7 @@ def create_self_signed_cert(
         C='US',
         ST='Utah',
         L='Salt Lake City',
-        O='Salt Stack',
+        O='SaltStack',
         OU=None,
         emailAddress='xyz@pdq.net'):
 
@@ -414,7 +428,7 @@ def create_self_signed_cert(
     L
         locality, default is "Centerville", the city where SaltStack originated
     O
-        organization, default is "Salt Stack"
+        organization, default is "SaltStack"
         NOTE: Must the same as CA certificate or an error will be raised
     OU
         organizational unit, default is None
@@ -426,21 +440,27 @@ def create_self_signed_cert(
 
     If the following values were set::
 
-        ca.cert_base_path='/etc/pki/koji'
+        ca.cert_base_path='/etc/pki'
         tls_dir='koji'
         CN='test.egavas.org'
 
     the resulting CERT, and corresponding key, would be written in the
     following location::
 
-        /etc/pki/tls/certs/test.egavas.org.crt
-        /etc/pki/tls/certs/test.egavas.org.key
+        /etc/pki/koji/certs/test.egavas.org.crt
+        /etc/pki/koji/certs/test.egavas.org.key
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' tls.create_self_signed_cert
+
+    Passing options from the command line:
+
+    .. code-block:: bash
+
+        salt 'minion' tls.create_self_signed_cert CN='test.mysite.org'
     '''
 
     if not os.path.exists('{0}/{1}/certs/'.format(_cert_base_path(), tls_dir)):
@@ -500,14 +520,16 @@ def create_self_signed_cert(
 
     _write_cert_to_database(tls_dir, cert)
 
-    ret = 'Created Private Key: {0}/{1}/certs/{2}.key. '.format(
-        _cert_base_path(),
-        tls_dir,
-        CN)
-    ret += 'Created Certificate: {0}/{1}/certs/{2}.crt.'.format(
-        _cert_base_path(),
-        tls_dir,
-        CN)
+    ret = 'Created Private Key: "{0}/{1}/certs/{2}.key." '.format(
+                    _cert_base_path(),
+                    tls_dir,
+                    CN
+                    )
+    ret += 'Created Certificate: "{0}/{1}/certs/{2}.crt."'.format(
+                    _cert_base_path(),
+                    tls_dir,
+                    CN
+                    )
 
     return ret
 
@@ -529,6 +551,17 @@ def create_ca_signed_cert(ca_name, CN, days=365):
 
     The CN *must* match an existing CSR generated by create_csr. If it
     does not, this method does nothing.
+
+    If the following values were set::
+
+        ca.cert_base_path='/etc/pki'
+        ca_name='koji'
+        CN='test.egavas.org'
+
+    the resulting signed certificate would be written in the
+    following location::
+
+        /etc/pki/koji/certs/test.egavas.org.crt
 
     CLI Example:
 
@@ -596,7 +629,7 @@ def create_ca_signed_cert(ca_name, CN, days=365):
 
     _write_cert_to_database(ca_name, cert)
 
-    return ('Created Certificate for "{0}", located at '
+    return ('Created Certificate for "{0}": '
             '"{1}/{2}/certs/{3}.crt"').format(
                     ca_name,
                     _cert_base_path(),
@@ -615,6 +648,17 @@ def create_pkcs12(ca_name, CN, passphrase=''):
         common name matching the certificate signing request
     passphrase
         used to unlock the PKCS#12 certificate when loaded into the browser
+
+    If the following values were set::
+
+        ca.cert_base_path='/etc/pki'
+        ca_name='koji'
+        CN='test.egavas.org'
+
+    the resulting signed certificate would be written in the
+    following location::
+
+        /etc/pki/koji/certs/test.egavas.org.p12
 
     CLI Example:
 
@@ -675,7 +719,7 @@ def create_pkcs12(ca_name, CN, passphrase=''):
         ), 'w') as ofile:
         ofile.write(pkcs12.export(passphrase=passphrase))
 
-    return ('Created PKCS#12 Certificate for "{0}", located at '
+    return ('Created PKCS#12 Certificate for "{0}": '
             '"{1}/{2}/certs/{3}.p12"').format(
                     CN,
                     _cert_base_path(),
@@ -691,7 +735,7 @@ if __name__ == '__main__':
             C="US",
             ST="Utah",
             L="Centerville",
-            O="Salt Stack",
+            O="SaltStack",
             OU=None,
             emailAddress='test_system@saltstack.org'
             )

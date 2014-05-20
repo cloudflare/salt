@@ -50,12 +50,23 @@ class MasterPillarUtil(object):
     def __init__(self,
                  tgt='',
                  expr_form='glob',
-                 env=None,
+                 saltenv=None,
                  use_cached_grains=True,
                  use_cached_pillar=True,
                  grains_fallback=True,
                  pillar_fallback=True,
-                 opts=None):
+                 opts=None,
+                 env=None):
+        if env is not None:
+            salt.utils.warn_until(
+                'Boron',
+                'Passing a salt environment should be done using \'saltenv\' '
+                'not \'env\'. This functionality will be removed in Salt '
+                'Boron.'
+            )
+            # Backwards compatibility
+            saltenv = env
+
         log.debug('New instance of {0} created.'.format(
             self.__class__.__name__))
         if opts is None:
@@ -68,19 +79,28 @@ class MasterPillarUtil(object):
         self.serial = salt.payload.Serial(self.opts)
         self.tgt = tgt
         self.expr_form = expr_form
-        self.env = env
+        self.saltenv = saltenv
         self.use_cached_grains = use_cached_grains
         self.use_cached_pillar = use_cached_pillar
         self.grains_fallback = grains_fallback
         self.pillar_fallback = pillar_fallback
-        log.debug('Init settings: tgt: \"{0}\", expr_form: \"{1}\", env: \"{2}\", use_cached_grains: {3}, use_cached_pillar: {4}, grains_fallback: {5}, pillar_fallback: {6}'.format(tgt, expr_form, env, use_cached_grains, use_cached_pillar, grains_fallback, pillar_fallback))
+        log.debug(
+            'Init settings: tgt: {0!r}, expr_form: {1!r}, saltenv: {2!r}, '
+            'use_cached_grains: {3}, use_cached_pillar: {4}, '
+            'grains_fallback: {5}, pillar_fallback: {6}'.format(
+                tgt, expr_form, saltenv, use_cached_grains, use_cached_pillar,
+                grains_fallback, pillar_fallback
+            )
+        )
 
     def _get_cached_minion_data(self, *minion_ids):
-        # Return two separate dicts of cached grains and pillar data of the minions
+        # Return two separate dicts of cached grains and pillar data of the
+        # minions
         grains = dict([(minion_id, {}) for minion_id in minion_ids])
         pillars = grains.copy()
         if not self.opts.get('minion_data_cache', False):
-            log.debug('Skipping cached data because minion_data_cache is not enabled.')
+            log.debug('Skipping cached data because minion_data_cache is not '
+                      'enabled.')
             return grains, pillars
         mdir = os.path.join(self.opts['cachedir'], 'minions')
         try:
@@ -89,7 +109,7 @@ class MasterPillarUtil(object):
                     continue
                 path = os.path.join(mdir, minion_id, 'data.p')
                 if os.path.isfile(path):
-                    with salt.utils.fopen(path) as fp_:
+                    with salt.utils.fopen(path, 'rb') as fp_:
                         mdata = self.serial.loads(fp_.read())
                         if mdata.get('grains', False):
                             grains[minion_id] = mdata['grains']
@@ -115,14 +135,18 @@ class MasterPillarUtil(object):
         if minion_id is None:
             return {}
         if not minion_grains:
-            log.warn('Cannot get pillar data for {0}: no grains supplied.'.format(minion_id))
+            log.warn(
+                'Cannot get pillar data for {0}: no grains supplied.'.format(
+                    minion_id
+                )
+            )
             return {}
         log.debug('Getting live pillar for {0}'.format(minion_id))
         pillar = salt.pillar.Pillar(
                             self.opts,
                             minion_grains,
                             minion_id,
-                            self.env,
+                            self.saltenv,
                             self.opts['ext_pillar'])
         log.debug('Compiling pillar for {0}'.format(minion_id))
         ret = pillar.compile_pillar()
@@ -306,21 +330,21 @@ class MasterPillarUtil(object):
                     # Not saving pillar or grains, so just delete the cache file
                     os.remove(os.path.join(data_file))
                 elif clear_pillar and minion_grains:
-                    with salt.utils.fopen(data_file, 'w+') as fp_:
+                    with salt.utils.fopen(data_file, 'w+b') as fp_:
                         fp_.write(self.serial.dumps({'grains': minion_grains}))
                 elif clear_grains and minion_pillar:
-                    with salt.utils.fopen(data_file, 'w+') as fp_:
+                    with salt.utils.fopen(data_file, 'w+b') as fp_:
                         fp_.write(self.serial.dumps({'pillar': minion_pillar}))
                 if clear_mine:
                     # Delete the whole mine file
                     os.remove(os.path.join(mine_file))
                 elif clear_mine_func is not None:
                     # Delete a specific function from the mine file
-                    with salt.utils.fopen(mine_file) as fp_:
+                    with salt.utils.fopen(mine_file, 'rb') as fp_:
                         mine_data = self.serial.loads(fp_.read())
                     if isinstance(mine_data, dict):
                         if mine_data.pop(clear_mine_func, False):
-                            with salt.utils.fopen(mine_file, 'w+') as fp_:
+                            with salt.utils.fopen(mine_file, 'w+b') as fp_:
                                 fp_.write(self.serial.dumps(mine_data))
         except (OSError, IOError):
             return True

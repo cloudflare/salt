@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
-Management of debconf selections.
-=================================
+Management of debconf selections
+================================
 
 The debconfmod state module manages the enforcement of debconf selections,
 this state can set those selections prior to package installation.
@@ -38,6 +38,10 @@ set_file
 '''
 
 
+# Define the module's virtual name
+__virtualname__ = 'debconf'
+
+
 def __virtual__():
     '''
     Confirm this module is on a Debian based system
@@ -48,7 +52,7 @@ def __virtual__():
     if 'debconf.show' not in __salt__:
         return False
 
-    return 'debconf'
+    return __virtualname__
 
 
 def set_file(name, source, **kwargs):
@@ -63,7 +67,7 @@ def set_file(name, source, **kwargs):
 
         <state_id>:
           debconf.set_file:
-            - source: salt://pathto/pkg.selections?env=myenvironment
+            - source: salt://pathto/pkg.selections?saltenv=myenvironment
 
     source:
         The location of the file containing the package selections
@@ -131,12 +135,12 @@ def set(name, data):
     current = __salt__['debconf.show'](name)
 
     for (key, args) in data.iteritems():
-         # For debconf data, valid booleans are 'true' and 'false';
-         # But str()'ing the args['value'] will result in 'True' and 'False'
-         # which will be ignored and overridden by a dpkg-reconfigure.
+        # For debconf data, valid booleans are 'true' and 'false';
+        # But str()'ing the args['value'] will result in 'True' and 'False'
+        # which will be ignored and overridden by a dpkg-reconfigure.
 
-         # So we should manually set these values to lowercase ones,
-         # before any str() call is performed.
+        # So we should manually set these values to lowercase ones,
+        # before any str() call is performed.
 
         if args['type'] == 'boolean':
             args['value'] = 'true' if args['value'] else 'false'

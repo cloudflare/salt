@@ -1,8 +1,8 @@
 Developing Salt
 ===============
 
-There is a great need for contributions to salt and patches are welcome! The goal 
-here is to make contributions clear, make sure there is a trail for where the code 
+There is a great need for contributions to Salt and patches are welcome! The goal
+here is to make contributions clear, make sure there is a trail for where the code
 has come from, and most importantly, to give credit where credit is due!
 
 There are a number of ways to contribute to salt development.
@@ -14,8 +14,8 @@ Sending a GitHub pull request
 This is the preferred method for contributions. Simply create a GitHub
 fork, commit changes to the fork, and then open up a pull request.
 
-The following is an example (from `Open Comparison Contributing Docs`_ ) 
-of an efficient workflow for forking, cloning, branching, committing, and 
+The following is an example (from `Open Comparison Contributing Docs`_ )
+of an efficient workflow for forking, cloning, branching, committing, and
 sending a pull request for a GitHub repository.
 
 First, make a local clone of your GitHub fork of the salt GitHub repo and make
@@ -29,7 +29,7 @@ Then, create a new branch on your clone by entering the following commands:
 
     Switched to a new branch 'fixed-broken-thing'
 
-Choose a name for your branch that describes its purpose.  
+Choose a name for your branch that describes its purpose.
 
 Now commit your changes to this new branch with the following command:
 
@@ -51,8 +51,8 @@ Push your locally-committed changes back up to GitHub:
 .. code-block:: bash
 
     git push --set-upstream origin fixed-broken-thing
-    
-Now go look at your fork of the salt repo on the GitHub website. The new 
+
+Now go look at your fork of the salt repo on the GitHub website. The new
 branch will now be listed under the "Source" tab where it says "Switch Branches".
 Select the new branch from this list, and then click the "Pull request" button.
 
@@ -62,7 +62,7 @@ to the pull request.
 The repo managers will be notified of your pull request and it will be
 reviewed. If a reviewer asks for changes, just make the changes locally in the
 same local feature branch, push them to GitHub, then add a comment to the
-discussion section of the pull request. 
+discussion section of the pull request.
 
 
 .. _enable-travis-ci:
@@ -81,7 +81,7 @@ Keeping Salt Forks in Sync
 Salt is advancing quickly. It is therefore critical to pull upstream changes
 from master into forks on a regular basis. Nothing is worse than putting in a
 days of hard work into a pull request only to have it rejected because it has
-diverged too far from master. 
+diverged too far from master.
 
 To pull in upstream changes:
 
@@ -187,7 +187,7 @@ Install Salt (and dependencies) into the virtualenv:
 .. note:: Installing M2Crypto
 
     ``swig`` and ``libssl-dev`` are required to build M2Crypto. To fix
-    the error ``command 'swig' failed with exit status 1`` while installing M2Crypto, 
+    the error ``command 'swig' failed with exit status 1`` while installing M2Crypto,
     try installing it with the following command:
 
     .. code-block:: bash
@@ -205,6 +205,10 @@ Install Salt (and dependencies) into the virtualenv:
     This also means that pulling in the M2Crypto installed using apt requires using
     ``--system-site-packages`` when creating the virtualenv.
 
+    If you're using a platform other than Debian or Ubuntu, and you are
+    installing M2Crypto via pip instead of a system package, then you will also
+    need the ``gcc`` compiler.
+
 .. note:: Installing psutil
 
     Python header files are required to build this module, otherwise the pip
@@ -213,21 +217,6 @@ Install Salt (and dependencies) into the virtualenv:
     Linux distributions which split the headers into their own package, this
     can be done by installing the ``python-dev`` or ``python-devel`` package.
     For other platforms, the package will likely be similarly named.
-
-.. note:: Important note for those developing using RedHat variants
-
-    For developers using a RedHat variant, be advised that the package
-    provider for newer Redhat-based systems (:doc:`yumpkg.py
-    <../ref/modules/all/salt.modules.yumpkg>`) relies on RedHat's python
-    interface for yum. The variants that use this module to provide package
-    support include the following:
-
-    * `RHEL`_ and `CentOS`_ releases 6 and later
-    * `Fedora Linux`_ releases 11 and later
-    * `Amazon Linux`_
-
-    Developers using one of these systems should create the salt virtualenv using the 
-    ``--system-site-packages`` option to ensure that the correct modules are available.
 
 .. _`RHEL`: https://www.redhat.com/products/enterprise-linux/
 .. _`CentOS`: http://centos.org/
@@ -276,6 +265,9 @@ Edit the minion config file:
 4.  Uncomment and change the ``id:`` value to something descriptive like
     "saltdev". This isn't strictly necessary but it will serve as a reminder of
     which Salt installation you are working with.
+5.  If you changed the ``ret_port`` value in the master config because you are
+    also running a non-development version of Salt, then you will have to
+    change the ``master_port`` value in the minion config to match.
 
 .. note:: Using `salt-call` with a :doc:`Standalone Minion </topics/tutorials/standalone_minion>`
 
@@ -335,8 +327,8 @@ and 103 characters on BSD-based systems.
     </topics/installation/osx>` instructions.
 
 
-Using easy_install to Install Salt
-----------------------------------
+Installing Salt from the Python Package Index
+---------------------------------------------
 
 If you are installing using ``easy_install``, you will need to define a
 :strong:`USE_SETUPTOOLS` environment variable, otherwise dependencies will not
@@ -345,49 +337,6 @@ be installed:
 .. code-block:: bash
 
     USE_SETUPTOOLS=1 easy_install salt
-
-Running the tests
-~~~~~~~~~~~~~~~~~
-
-You will need ``mock`` to run the tests:
-
-.. code-block:: bash
-
-    pip install mock
-
-If you are on Python < 2.7 then you will also need unittest2:
-
-.. code-block:: bash
-
-    pip install unittest2
-
-
-.. note::
-
-    In Salt 0.17, testing libraries were migrated into their own repo. To install them:
-
-     .. code-block:: bash
-
-         pip install git+https://github.com/saltstack/salt-testing.git#egg=SaltTesting
-
-
-    Failure to install SaltTesting will result in import errors similar to the following:
-
-     .. code-block:: bash
-
-        ImportError: No module named salttesting
-
-Finally you use setup.py to run the tests with the following command:
-
-.. code-block:: bash
-
-    ./setup.py test
-
-For greater control while running the tests, please try:
-
-.. code-block:: bash
-
-    ./tests/runtests.py -h
 
 
 Editing and previewing the documentation
@@ -431,3 +380,21 @@ Change to salt documentation directory, then:
 .. code-block:: bash
 
     make SPHINXBUILD=sphinx-1.0-build html
+
+Once you've updated the documentation, you can run the following command to
+launch a simple Python HTTP server to see your changes:
+
+.. code-block:: bash
+
+    cd _build/html; python -m SimpleHTTPServer
+
+Running unit and integration tests
+----------------------------------
+
+Run the test suite with following command:
+
+.. code-block:: bash
+
+    ./setup.py test
+
+See :doc:`here <tests/index>` for more information regarding the test suite.

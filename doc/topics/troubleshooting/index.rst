@@ -6,6 +6,23 @@ The intent of the troubleshooting section is to introduce solutions to a
 number of common issues encountered by users and the tools that are available
 to aid in developing States and Salt code.
 
+Troubleshooting the Salt Master
+===============================
+
+If your Salt master is having issues such as minions not returning data, slow
+execution times, or a variety of other issues the 
+:doc:`Salt master troubleshooting page
+</topics/troubleshooting/master>` contains details on troubleshooting the most
+common issues encountered.
+
+Troubleshooting the Salt Minion
+===============================
+
+In the event that your Salt minion is having issues a variety of solutions
+and suggestions are available at the :doc:`Salt minion troubleshooting page
+</topics/troubleshooting/minion>`.
+
+
 Running in the Foreground
 =========================
 
@@ -208,12 +225,23 @@ sure the master of minion are running in the foreground:
     salt-master -l debug
     salt-minion -l debug
 
-The pass the signal to the master or minion when it seems to be unresponsive:
+Then pass the signal to the master or minion when it seems to be unresponsive:
 
 .. code-block:: bash
 
     killall -SIGUSR1 salt-master
     killall -SIGUSR1 salt-minion
 
+Also under BSD and Mac OS X in addition to SIGUSR1 signal, debug subroutine set
+up for SIGINFO which has an advantage of being sent by Ctrl+T shortcut.
+
 When filing an issue or sending questions to the mailing list for a problem
 with an unresponsive daemon this information can be invaluable.
+
+Salt 0.16.x minions cannot communicate with a 0.17.x master
+===========================================================
+
+As of release 0.17.1 you can no longer run different versions of Salt on your
+Master and Minion servers. This is due to a protocol change for security
+purposes. The Salt team will continue to attempt to ensure versions are as
+backwards compatible as possible.

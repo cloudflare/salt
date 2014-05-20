@@ -1,7 +1,17 @@
 # -*- coding: utf-8 -*-
 '''
-This module provides the point of entry for client applications to interface to salt.
-The purpose is to have a simplified consistent interface for various client applications
+This module provides the point of entry for client applications to interface to
+salt. The purpose is to have a simplified consistent interface for various
+client applications.
+
+.. warning:: This API is not yet public or stable!
+
+    This API exists in its current form as an entry point for Halite only. This
+    interface is likely to change without warning. Long-term plans are to make
+    this public as a unified interface to Salt's *Client() APIs. Until that
+    time please use Salt's *Client() interfaces individually:
+
+    http://docs.saltstack.com/ref/clients/index.html
 
 '''
 # Import Python libs
@@ -15,8 +25,8 @@ import salt.runner
 import salt.wheel
 import salt.utils
 import salt.syspaths as syspaths
-from salt.exceptions import SaltException, EauthAuthenticationError
 from salt.utils.event import tagify
+from salt.exceptions import EauthAuthenticationError
 
 
 def tokenify(cmd, token=None):
@@ -34,8 +44,6 @@ class APIClient(object):
     '''
     Provide a uniform method of accessing the various client interfaces in Salt
     in the form of low-data data structures. For example:
-
-
     '''
     def __init__(self, opts=None):
         if not opts:
@@ -86,11 +94,11 @@ class APIClient(object):
             minion client.
             Example:
                 fun of 'wheel.config.values' run with master wheel client
-                fun of 'runnner.manage.status' run with master runner client
+                fun of 'runner.manage.status' run with master runner client
                 fun of 'test.ping' run with local minion client
                 fun of 'wheel.foobar' run with with local minion client not wheel
         kwarg: A dictionary of keyword function parameters to be passed to the eventual
-               salt function specificed by fun:
+               salt function specified by fun:
         tgt: Pattern string specifying the targeted minions when the implied client is local
         expr_form: Optional target pattern type string when client is local minion.
             Defaults to 'glob' if missing
@@ -103,6 +111,7 @@ class APIClient(object):
         eauth: the authentication type such as 'pam' or 'ldap'. Required if token is missing
 
         '''
+        cmd = dict(cmd)  # make copy
         client = 'minion'  # default to local minion client
         mode = cmd.get('mode', 'async')  # default to 'async'
 
@@ -164,7 +173,6 @@ class APIClient(object):
 
         cmd is dict of the form:
         {
-            'client': 'clienttypestring'
             'module' : 'modulestring',
             'tgt' : 'targetpatternstring',
             'expr_form' : 'targetpatterntype',
@@ -175,7 +183,7 @@ class APIClient(object):
         }
 
         The cmd dict items are as follows:
-        client: Either 'master' or 'minion'. Defaults to 'minion' if missing
+
         module: required. This is either a module or module function name for
             the specified client.
         tgt: Optional pattern string specifying the targeted minions when client
@@ -188,6 +196,17 @@ class APIClient(object):
         password: the user's password. Required if token is missing.
         eauth: the authentication type such as 'pam' or 'ldap'. Required if token is missing
 
+        Adds client per the command.
+        '''
+        cmd['client'] = 'minion'
+        if len(cmd['module'].split('.')) > 2 and cmd['module'].split('.')[0] in ['runner', 'wheel']:
+            cmd['client'] = 'master'
+        return self._signature(cmd)
+
+    def _signature(self, cmd):
+        '''
+        Expects everything that signature does and also a client type string.
+        client can either be master or minion.
         '''
         result = {}
 
@@ -204,7 +223,7 @@ class APIClient(object):
                 functions = self.wheelClient.w_funcs
             elif client == 'runner':
                 functions = self.runnerClient.functions
-            result = salt.utils.argspec_report(functions, module)
+            result = {'master': salt.utils.argspec_report(functions, module)}
         return result
 
     def create_token(self, creds):
@@ -255,10 +274,11 @@ class APIClient(object):
             raise EauthAuthenticationError("Authentication failed with provided credentials.")
 
         # Grab eauth config for the current backend for the current user
-        if tokenage['name'] in self.opts['external_auth'][tokenage['eauth']]:
-            tokenage['perms'] = self.opts['external_auth'][tokenage['eauth']][tokenage['name']]
+        tokenage_eauth = self.opts['external_auth'][tokenage['eauth']]
+        if tokenage['name'] in tokenage_eauth:
+            tokenage['perms'] = tokenage_eauth[tokenage['name']]
         else:
-            tokenage['perms'] = self.opts['external_auth'][tokenage['eauth']]['*']
+            tokenage['perms'] = tokenage_eauth['*']
 
         tokenage['user'] = tokenage['name']
         tokenage['username'] = tokenage['name']
@@ -280,16 +300,14 @@ class APIClient(object):
 
     def get_event(self, wait=0.25, tag='', full=False):
         '''
-        Returns next available event with tag tag from event bus
-        If any within wait seconds
+        Get a single salt event.
+        If no events are available, then block for up to ``wait`` seconds.
+        Return the event if it matches the tag (or ``tag`` is empty)
         Otherwise return None
-
-        If tag is empty then return events for all tags
-        If full then add tag field to returned data
 
         If wait is 0 then block forever or until next event becomes available.
         '''
-        return (self.event.get_event(wait=wait, tag=tag, full=full))
+        return self.event.get_event(wait=wait, tag=tag, full=full)
 
     def fire_event(self, data, tag):
         '''
@@ -298,4 +316,4 @@ class APIClient(object):
         Need to convert this to a master call with appropriate authentication
 
         '''
-        return (self.event.fire_event(data, tagify(tag, 'wui')))
+        return self.event.fire_event(data, tagify(tag, 'wui'))

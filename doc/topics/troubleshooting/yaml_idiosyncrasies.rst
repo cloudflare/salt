@@ -31,15 +31,17 @@ but YAML will follow whatever indentation system that the individual file
 uses. Indentation of two spaces works very well for SLS files given the
 fact that the data is uniform and not deeply nested.
 
+.. _nested-dict-indentation:
+
 Nested Dicts (key=value)
 ------------------------
 
-When :ref:`dicts <python2:typesmapping>` are more deeply nested, they no
-longer follow the same indentation logic. This is rarely something that
-comes up in Salt, since deeply nested options like these are discouraged
-when making State modules, but some do exist. A good example is the context
-and default options in the :doc:`file.managed</ref/states/all/salt.states.file>`
-state:
+When :ref:`dicts <python2:typesmapping>` are more deeply nested, they no longer
+follow the same indentation logic. This is rarely something that comes up in
+Salt, since deeply nested options like these are discouraged when making State
+modules, but some do exist. A good example of this can be found in the
+``context`` and ``default`` options from the :doc:`file.managed
+</ref/states/all/salt.states.file>` state:
 
 .. code-block:: yaml
 
@@ -57,10 +59,11 @@ state:
             custom_var: "default value"
             other_var: 123
 
-Notice that the spacing used is 2 spaces, and that when defining the context
-and defaults options there is a 4 space indent. If only a 2 space indent is
-used then the information will not be loaded correctly. If using double spacing
-is not desirable, then a deeply nested dict can be declared with curly braces:
+Notice that while the indentation is two spaces per level, for the values under
+the ``context`` and ``defaults`` options there is a four-space indent. If only
+two spaces are used to indent, then the information will not be loaded
+correctly. If using a double indent is not desirable, then a deeply-nested dict
+can be declared with curly braces:
 
 .. code-block:: yaml
 
@@ -265,3 +268,21 @@ Here's an example:
     20130510
     >>> yaml.safe_load('"2013_05_10"')
     '2013_05_10'
+
+Automatic ``datetime`` conversion
+=================================
+
+If there is a value in a YAML file formatted ``2014-01-20 14:23:23`` or
+similar, YAML will automatically convert this to a Python ``datetime`` object.
+These objects are not msgpack serializable, and so may break core salt
+functionality.  If values such as these are needed in a salt YAML file
+(specifically a configuration file), they should be formatted with surrounding
+strings to force YAML to serialize them as strings:
+
+.. code-block:: python
+
+    >>> import yaml
+    >>> yaml.safe_load('2014-01-20 14:23:23')
+    datetime.datetime(2014, 1, 20, 14, 23, 23)
+    >>> yaml.safe_load('"2014-01-20 14:23:23"')
+    '2014-01-20 14:23:23'

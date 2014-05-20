@@ -9,7 +9,6 @@ Full list of builtin execution modules
     .. toctree::
 
         salt.modules.pkg
-        salt.modules.sys
 
 .. currentmodule:: salt.modules
 
@@ -20,16 +19,20 @@ Full list of builtin execution modules
     aliases
     alternatives
     apache
-    apt
+    aptpkg
     archive
     at
     augeas_cfg
+    aws_sqs
     bluez
     brew
     bridge
     bsd_shadow
     cassandra
+    chocolatey
+    cloud
     cmdmod
+    composer
     config
     cp
     cron
@@ -38,12 +41,14 @@ Full list of builtin execution modules
     data
     ddns
     debconfmod
+    debian_ip
     debian_service
     dig
     disk
     djangomod
     dnsmasq
     dnsutil
+    dockerio
     dpkg
     ebuild
     eix
@@ -55,18 +60,21 @@ Full list of builtin execution modules
     freebsdjail
     freebsdkmod
     freebsdpkg
+    freebsdports
     freebsdservice
     gem
     gentoo_service
     gentoolkitmod
     git
     glance
+    gnomedesktop
     grains
     groupadd
     grub_legacy
     guestfs
     hg
     hosts
+    htpasswd
     img
     iptables
     key
@@ -82,12 +90,14 @@ Full list of builtin execution modules
     localemod
     locate
     logrotate
+    lvs
     lxc
     mac_group
     mac_user
     makeconf
     match
     mdadm
+    memcached
     mine
     modjk
     mongodb
@@ -103,11 +113,13 @@ Full list of builtin execution modules
     nginx
     nova
     npm
-    nzbget
+    omapi
     openbsdpkg
     openbsdservice
+    openstack_config
     osxdesktop
     pacman
+    pagerduty
     pam
     parted
     pecl
@@ -120,6 +132,7 @@ Full list of builtin execution modules
     portage_config
     postgres
     poudriere
+    powerpath
     ps
     publish
     puppet
@@ -130,13 +143,16 @@ Full list of builtin execution modules
     quota
     rabbitmq
     rbenv
+    rdp
     reg
     ret
     rh_ip
     rh_service
+    riak
     rpm
     rvm
     s3
+    saltcloudmod
     saltutil
     seed
     selinux
@@ -168,19 +184,29 @@ Full list of builtin execution modules
     useradd
     virt
     virtualenv_mod
+    win_autoruns
     win_disk
+    win_dns_client
     win_file
+    win_firewall
     win_groupadd
+    win_ip
     win_network
+    win_ntp
+    win_path
     win_pkg
+    win_repo
+    win_servermanager
     win_service
     win_shadow
     win_status
     win_system
+    win_timezone
     win_useradd
     xapi
+    xmpp
     yumpkg
-    yumpkg5
+    zcbuildout
     zfs
     zpool
     zypper

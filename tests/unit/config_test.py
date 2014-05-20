@@ -10,14 +10,18 @@
 '''
 
 # Import python libs
+import logging
 import os
 import shutil
 import tempfile
 import warnings
+from contextlib import contextmanager
 
 # Import Salt Testing libs
 from salttesting import TestCase
-from salttesting.helpers import ensure_in_syspath
+from salttesting.mock import MagicMock, patch, mock_open, call
+from salttesting.helpers import ensure_in_syspath, TestsLoggingHandler
+from salt.exceptions import CommandExecutionError
 
 ensure_in_syspath('../')
 
@@ -27,6 +31,59 @@ import salt.utils
 import integration
 from salt import config as sconfig, version as salt_version
 from salt.version import SaltStackVersion
+
+log = logging.getLogger(__name__)
+
+
+MOCK_ETC_HOSTS = (
+    '##\n'
+    '# Host Database\n'
+    '#\n'
+    '# localhost is used to configure the loopback interface\n'
+    '# when the system is booting.  Do not change this entry.\n'
+    '##\n'
+    '\n'  # This empty line MUST STAY HERE, it factors into the tests
+    '127.0.0.1      localhost   foo.bar.net\n'
+    '10.0.0.100     foo.bar.net\n'
+)
+MOCK_ETC_HOSTNAME = 'foo.bar.com\n'
+
+
+def _unhandled_mock_read(filename):
+    '''
+    Raise an error because we should not be calling salt.utils.fopen()
+    '''
+    raise CommandExecutionError('Unhandled mock read for {0}'.format(filename))
+
+
+@contextmanager
+def _fopen_side_effect_etc_hostname(filename):
+    '''
+    Mock reading from /etc/hostname
+    '''
+    log.debug('Mock-reading {0}'.format(filename))
+    if filename == '/etc/hostname':
+        mock_open = MagicMock()
+        mock_open.read.return_value = MOCK_ETC_HOSTNAME
+        yield mock_open
+    else:
+        _unhandled_mock_read(filename)
+
+
+@contextmanager
+def _fopen_side_effect_etc_hosts(filename):
+    '''
+    Mock /etc/hostname not existing, and falling back to reading /etc/hosts
+    '''
+    log.debug('Mock-reading {0}'.format(filename))
+    if filename == '/etc/hostname':
+        raise IOError(2, "No such file or directory: '/etc/hostname'")
+    elif filename == '/etc/hosts':
+        mock_open = MagicMock()
+        mock_open.__iter__.return_value = MOCK_ETC_HOSTS.splitlines()
+        yield mock_open
+    else:
+        _unhandled_mock_read(filename)
 
 
 class ConfigTestCase(TestCase):
@@ -282,21 +339,21 @@ class ConfigTestCase(TestCase):
         )
         syndic_opts.update(salt.minion.resolve_dns(syndic_opts))
         # id & pki dir are shared & so configured on the minion side
-        self.assertEquals(syndic_opts['id'], 'minion')
-        self.assertEquals(syndic_opts['pki_dir'], '/tmp/salttest/pki')
+        self.assertEqual(syndic_opts['id'], 'minion')
+        self.assertEqual(syndic_opts['pki_dir'], '/tmp/salttest/pki')
         # the rest is configured master side
-        self.assertEquals(syndic_opts['master_uri'], 'tcp://127.0.0.1:54506')
-        self.assertEquals(syndic_opts['master_port'], 54506)
-        self.assertEquals(syndic_opts['master_ip'], '127.0.0.1')
-        self.assertEquals(syndic_opts['master'], 'localhost')
-        self.assertEquals(syndic_opts['sock_dir'], '/tmp/salttest/minion_sock')
-        self.assertEquals(syndic_opts['cachedir'], '/tmp/salttest/cachedir')
-        self.assertEquals(syndic_opts['log_file'], '/tmp/salttest/osyndic.log')
-        self.assertEquals(syndic_opts['pidfile'], '/tmp/salttest/osyndic.pid')
+        self.assertEqual(syndic_opts['master_uri'], 'tcp://127.0.0.1:54506')
+        self.assertEqual(syndic_opts['master_port'], 54506)
+        self.assertEqual(syndic_opts['master_ip'], '127.0.0.1')
+        self.assertEqual(syndic_opts['master'], 'localhost')
+        self.assertEqual(syndic_opts['sock_dir'], '/tmp/salttest/minion_sock')
+        self.assertEqual(syndic_opts['cachedir'], '/tmp/salttest/cachedir')
+        self.assertEqual(syndic_opts['log_file'], '/tmp/salttest/osyndic.log')
+        self.assertEqual(syndic_opts['pidfile'], '/tmp/salttest/osyndic.pid')
         # Show that the options of localclient that repub to local master
         # are not merged with syndic ones
-        self.assertEquals(syndic_opts['_master_conf_file'], minion_config_path)
-        self.assertEquals(syndic_opts['_minion_conf_file'], syndic_conf_path)
+        self.assertEqual(syndic_opts['_master_conf_file'], minion_config_path)
+        self.assertEqual(syndic_opts['_minion_conf_file'], syndic_conf_path)
 
     def test_check_dns_deprecation_warning(self):
         helium_version = SaltStackVersion.from_name('Helium')
@@ -355,6 +412,68 @@ class ConfigTestCase(TestCase):
                 'now deprecated. \'check_dns\' will be removed in Salt '
                 '{0}.'.format(helium_version.formatted_version),
                 str(w[-1].message)
+            )
+
+    def test_issue_6714_parsing_errors_logged(self):
+        try:
+            tempdir = tempfile.mkdtemp(dir=integration.SYS_TMP_DIR)
+            test_config = os.path.join(tempdir, 'config')
+
+            # Let's populate a master configuration file with some basic
+            # settings
+            salt.utils.fopen(test_config, 'w').write(
+                'root_dir: {0}\n'
+                'log_file: {0}/foo.log\n'.format(tempdir) +
+                '\n\n\n'
+                'blah:false\n'
+            )
+
+            with TestsLoggingHandler() as handler:
+                # Let's load the configuration
+                config = sconfig.master_config(test_config)
+                for message in handler.messages:
+                    if message.startswith('ERROR:Error parsing configuration'):
+                        break
+                else:
+                    raise AssertionError(
+                        'No parsing error message was logged'
+                    )
+        finally:
+            if os.path.isdir(tempdir):
+                shutil.rmtree(tempdir)
+
+    @patch('socket.getfqdn', MagicMock(return_value='foo.bar.org'))
+    def test_get_id_socket_getfqdn(self):
+        '''
+        Test calling salt.config.get_id() and getting the hostname from
+        socket.getfqdn()
+        '''
+        with patch('salt.utils.fopen',
+                   MagicMock(side_effect=_unhandled_mock_read)):
+            self.assertEqual(
+                sconfig.get_id(cache=False), ('foo.bar.org', False)
+            )
+
+    @patch('socket.getfqdn', MagicMock(return_value='localhost'))
+    def test_get_id_etc_hostname(self):
+        '''
+        Test calling salt.config.get_id() and falling back to looking at
+        /etc/hostname.
+        '''
+        with patch('salt.utils.fopen', _fopen_side_effect_etc_hostname):
+            self.assertEqual(
+                sconfig.get_id(cache=False), ('foo.bar.com', False)
+            )
+
+    @patch('socket.getfqdn', MagicMock(return_value='localhost'))
+    def test_get_id_etc_hosts(self):
+        '''
+        Test calling salt.config.get_id() and falling back all the way to
+        looking up data from /etc/hosts.
+        '''
+        with patch('salt.utils.fopen', _fopen_side_effect_etc_hosts):
+            self.assertEqual(
+                sconfig.get_id(cache=False), ('foo.bar.net', False)
             )
 
 

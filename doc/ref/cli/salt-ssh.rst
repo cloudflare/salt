@@ -12,7 +12,7 @@ Synopsis
 Description
 ===========
 
-Salt ssh allows for salt routines to be executed using only ssh for transport
+Salt SSH allows for salt routines to be executed using only SSH for transport
 
 Options
 =======
@@ -41,7 +41,7 @@ Options
 
 .. option:: --passwd
 
-    Set te default password to attempt to use when authenticating.
+    Set the default password to attempt to use when authenticating.
 
 .. option:: --key-deploy
 

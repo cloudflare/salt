@@ -13,12 +13,18 @@ state_verbose:
     instruct the highstate outputter to omit displaying anything in green, this
     means that nothing with a result of True and no changes will not be printed
 state_output:
-    The highstate outputter has three output modes, `full`, `terse`, and
-    `mixed`. The default is set to full, which will display many lines of
+    The highstate outputter has three output modes, `full`, `terse`, `mixed`,
+    and `changes`. The default is set to full, which will display many lines of
     detailed information for each executed chunk. If the `state_output` option
     is set to `terse` then the output is greatly simplified and shown in only
     one line.  If `mixed` is used, then terse output will be used unless a
-    state failed, in which case full output will be used.
+    state failed, in which case full output will be used.  If `changes` is used,
+    then terse output will be used if there was no error and no changes,
+    otherwise full output will be used.
+state_tabular:
+    If `state_output` uses the terse output, set this to `True` for an aligned
+    output format.  If you wish to use a custom format, this can be set to a
+    string.
 '''
 
 # Import python libs
@@ -26,7 +32,6 @@ import pprint
 
 # Import salt libs
 import salt.utils
-from salt._compat import string_types
 
 
 def output(data):
@@ -35,172 +40,200 @@ def output(data):
     be used with the state.highstate function, or a function that returns
     highstate return data.
     '''
+    for host, hostdata in data.iteritems():
+        return _format_host(host, hostdata)[0]
+
+
+def _format_host(host, data):
     colors = salt.utils.get_colors(__opts__.get('color'))
-    for host in data:
-        rcounts = {}
-        hcolor = colors['GREEN']
-        hstrs = []
-        if isinstance(data[host], list):
-            # Errors have been detected, list them in RED!
-            hcolor = colors['RED_BOLD']
-            hstrs.append(('    {0}Data failed to compile:{1[ENDC]}'
-                          .format(hcolor, colors)))
-            for err in data[host]:
-                hstrs.append(('{0}----------\n    {1}{2[ENDC]}'
-                              .format(hcolor, err, colors)))
-        if isinstance(data[host], dict):
-            # Strip out the result: True, without changes returns if
-            # state_verbose is False
-            if not __opts__.get('state_verbose', False):
-                data[host] = _strip_clean(data[host])
-            # Verify that the needed data is present
-            for tname, info in data[host].items():
-                if not '__run_num__' in info:
-                    err = ('The State execution failed to record the order '
-                           'in which all states were executed. The state '
-                           'return missing data is:')
-                    hstrs.insert(0, pprint.pformat(info))
-                    hstrs.insert(0, err)
-            # Everything rendered as it should display the output
-            for tname in sorted(
-                    data[host],
-                    key=lambda k: data[host][k].get('__run_num__', 0)):
-                ret = data[host][tname]
-                # Increment result counts
-                rcounts.setdefault(ret['result'], 0)
-                rcounts[ret['result']] += 1
-                tcolor = colors['GREEN']
-                if ret['changes']:
-                    tcolor = colors['CYAN']
-                if ret['result'] is False:
-                    hcolor = colors['RED']
-                    tcolor = colors['RED']
-                if ret['result'] is None:
-                    hcolor = colors['YELLOW']
-                    tcolor = colors['YELLOW']
-                comps = tname.split('_|-')
-                if __opts__.get('state_output', 'full').lower() == 'terse':
-                    # Print this chunk in a terse way and continue in the
-                    # loop
-                    msg = _format_terse(tcolor, comps, ret, colors)
+    tabular = __opts__.get('state_tabular', False)
+    rcounts = {}
+    hcolor = colors['GREEN']
+    hstrs = []
+    changed = False
+    if isinstance(data, list):
+        # Errors have been detected, list them in RED!
+        hcolor = colors['RED_BOLD']
+        hstrs.append(('    {0}Data failed to compile:{1[ENDC]}'
+                      .format(hcolor, colors)))
+        for err in data:
+            hstrs.append(('{0}----------\n    {1}{2[ENDC]}'
+                          .format(hcolor, err, colors)))
+    if isinstance(data, dict):
+        # Strip out the result: True, without changes returns if
+        # state_verbose is False
+        if not __opts__.get('state_verbose', False):
+            data = _strip_clean(data)
+        # Verify that the needed data is present
+        for tname, info in data.items():
+            if not '__run_num__' in info:
+                err = ('The State execution failed to record the order '
+                       'in which all states were executed. The state '
+                       'return missing data is:')
+                hstrs.insert(0, pprint.pformat(info))
+                hstrs.insert(0, err)
+        # Everything rendered as it should display the output
+        for tname in sorted(
+                data,
+                key=lambda k: data[k].get('__run_num__', 0)):
+            ret = data[tname]
+            # Increment result counts
+            rcounts.setdefault(ret['result'], 0)
+            rcounts[ret['result']] += 1
+            tcolor = colors['GREEN']
+            schanged, ctext = _format_changes(ret['changes'])
+            changed = changed or schanged
+            if schanged:
+                tcolor = colors['CYAN']
+            if ret['result'] is False:
+                hcolor = colors['RED']
+                tcolor = colors['RED']
+            if ret['result'] is None:
+                hcolor = colors['YELLOW']
+                tcolor = colors['YELLOW']
+            comps = tname.split('_|-')
+            if __opts__.get('state_output', 'full').lower() == 'terse':
+                # Print this chunk in a terse way and continue in the
+                # loop
+                msg = _format_terse(tcolor, comps, ret, colors, tabular)
+                hstrs.append(msg)
+                continue
+            elif __opts__.get('state_output', 'full').lower() == 'mixed':
+                # Print terse unless it failed
+                if ret['result'] is not False:
+                    msg = _format_terse(tcolor, comps, ret, colors, tabular)
                     hstrs.append(msg)
                     continue
-                elif __opts__.get('state_output', 'full').lower() == 'mixed':
-                    # Print terse unless it failed
-                    if ret['result'] is not False:
-                        msg = _format_terse(tcolor, comps, ret, colors)
-                        hstrs.append(msg)
-                        continue
-                elif __opts__.get('state_output', 'full').lower() == 'changes':
-                    # Print terse if no error and no changes, otherwise, be
-                    # verbose
-                    if ret['result'] and not ret['changes']:
-                        msg = _format_terse(tcolor, comps, ret, colors)
-                        hstrs.append(msg)
-                        continue
-                hstrs.append(('{0}----------\n    State: - {1}{2[ENDC]}'
-                              .format(tcolor, comps[0], colors)))
-                hstrs.append('    {0}Name:      {1}{2[ENDC]}'.format(
-                    tcolor,
-                    comps[2],
-                    colors
-                ))
-                hstrs.append('    {0}Function:  {1}{2[ENDC]}'.format(
-                    tcolor,
-                    comps[-1],
-                    colors
-                ))
-                hstrs.append('        {0}Result:    {1}{2[ENDC]}'.format(
-                    tcolor,
-                    str(ret['result']),
-                    colors
-                ))
-                hstrs.append('        {0}Comment:   {1}{2[ENDC]}'.format(
-                    tcolor,
-                    ret['comment'],
-                    colors
-                ))
-                changes = '        Changes:   '
-                if not isinstance(ret['changes'], dict):
-                    changes += 'Invalid Changes data: {0}'.format(
-                            ret['changes'])
-                else:
-                    for key in ret['changes']:
-                        if isinstance(ret['changes'][key], string_types):
-                            changes += (key + ': ' + ret['changes'][key] +
-                                        '\n                   ')
-                        elif isinstance(ret['changes'][key], dict):
-                            innerdict = '{ '
-                            for k, v in ret['changes'][key].iteritems():
-                                innerdict += '{0} : {1}\n'.format(k, v)
-                            innerdict += '}'
-                            changes += (key + ': ' +
-                                        innerdict +
-                                        '\n                   ')
-                        else:
-                            changes += (key + ': ' +
-                                        pprint.pformat(ret['changes'][key]) +
-                                        '\n                   ')
-                hstrs.append(('{0}{1}{2[ENDC]}'
-                              .format(tcolor, changes, colors)))
+            elif __opts__.get('state_output', 'full').lower() == 'changes':
+                # Print terse if no error and no changes, otherwise, be
+                # verbose
+                if ret['result'] and not schanged:
+                    msg = _format_terse(tcolor, comps, ret, colors, tabular)
+                    hstrs.append(msg)
+                    continue
+            state_lines = [
+                '{tcolor}----------{colors[ENDC]}',
+                '    {tcolor}      ID: {comps[1]}{colors[ENDC]}',
+                '    {tcolor}Function: {comps[0]}.{comps[3]}{colors[ENDC]}',
+                '    {tcolor}  Result: {ret[result]!s}{colors[ENDC]}',
+                '    {tcolor} Comment: {comment}{colors[ENDC]}'
+            ]
+            # This isn't the prettiest way of doing this, but it's readable.
+            if comps[1] != comps[2]:
+                state_lines.insert(
+                    3, '    {tcolor}    Name: {comps[2]}{colors[ENDC]}')
+            try:
+                comment = ret['comment'].strip().replace('\n', '\n' + ' ' * 14)
+            except AttributeError:
+                comment = ret['comment'].join(' ').replace('\n',
+                                                           '\n' + ' ' * 13)
+            svars = {
+                'tcolor': tcolor,
+                'comps': comps,
+                'ret': ret,
+                'comment': comment,
+                # This nukes any trailing \n and indents the others.
+                'colors': colors
+            }
+            hstrs.extend([sline.format(**svars) for sline in state_lines])
+            changes = '     Changes:   ' + ctext
+            hstrs.append(('{0}{1}{2[ENDC]}'
+                          .format(tcolor, changes, colors)))
 
-            # Append result counts to end of output
-            colorfmt = '{0}{1}{2[ENDC]}'
-            rlabel = {True: 'Succeeded', False: 'Failed', None: 'Not Run'}
-            count_max_len = max([len(str(x)) for x in rcounts.values()] or [0])
-            label_max_len = max([len(x) for x in rlabel.values()] or [0])
-            line_max_len = label_max_len + count_max_len + 2  # +2 for ': '
+        # Append result counts to end of output
+        colorfmt = '{0}{1}{2[ENDC]}'
+        rlabel = {True: 'Succeeded', False: 'Failed', None: 'Not Run'}
+        count_max_len = max([len(str(x)) for x in rcounts.values()] or [0])
+        label_max_len = max([len(x) for x in rlabel.values()] or [0])
+        line_max_len = label_max_len + count_max_len + 2  # +2 for ': '
+        hstrs.append(
+            colorfmt.format(
+                colors['CYAN'],
+                '\nSummary\n{0}'.format('-' * line_max_len),
+                colors
+            )
+        )
+
+        def _counts(label, count):
+            return '{0}: {1:>{2}}'.format(
+                label,
+                count,
+                line_max_len - (len(label) + 2)
+            )
+
+        # Successful states
+        hstrs.append(
+            colorfmt.format(
+                colors['GREEN'],
+                _counts(rlabel[True], rcounts.get(True, 0)),
+                colors
+            )
+        )
+
+        # Failed states
+        num_failed = rcounts.get(False, 0)
+        hstrs.append(
+            colorfmt.format(
+                colors['RED'] if num_failed else colors['CYAN'],
+                _counts(rlabel[False], num_failed),
+                colors
+            )
+        )
+
+        # test=True states
+        if None in rcounts:
             hstrs.append(
                 colorfmt.format(
-                    colors['CYAN'],
-                    '\nSummary\n{0}'.format('-' * line_max_len),
+                    colors['YELLOW'],
+                    _counts(rlabel[None], rcounts.get(None, 0)),
                     colors
                 )
             )
 
-            def _counts(label, count):
-                return '{0}: {1:>{2}}'.format(
-                    label,
-                    count,
-                    line_max_len - (len(label) + 2)
-                )
+        totals = '{0}\nTotal: {1:>{2}}'.format('-' * line_max_len,
+                                               sum(rcounts.values()),
+                                               line_max_len - 7)
+        hstrs.append(colorfmt.format(colors['CYAN'], totals, colors))
 
-            # Successful states
-            hstrs.append(
-                colorfmt.format(
-                    colors['GREEN'],
-                    _counts(rlabel[True], rcounts.get(True, 0)),
-                    colors
-                )
-            )
+    hstrs.insert(0, ('{0}{1}:{2[ENDC]}'.format(hcolor, host, colors)))
+    return '\n'.join(hstrs), changed
 
-            # Failed states
-            num_failed = rcounts.get(False, 0)
-            hstrs.append(
-                colorfmt.format(
-                    colors['RED'] if num_failed else colors['CYAN'],
-                    _counts(rlabel[False], num_failed),
-                    colors
-                )
-            )
 
-            # test=True states
-            if None in rcounts:
-                hstrs.append(
-                    colorfmt.format(
-                        colors['YELLOW'],
-                        _counts(rlabel[None], rcounts.get(None, 0)),
-                        colors
-                    )
-                )
+def _format_changes(changes):
+    '''
+    Format the changes dict based on what the data is
+    '''
+    global __opts__  # pylint: disable=W0601
 
-            totals = '{0}\nTotal: {1:>{2}}'.format('-' * line_max_len,
-                                                   sum(rcounts.values()),
-                                                   line_max_len - 7)
-            hstrs.append(colorfmt.format(colors['CYAN'], totals, colors))
+    if not changes:
+        return False, ''
 
-        hstrs.insert(0, ('{0}{1}:{2[ENDC]}'.format(hcolor, host, colors)))
-        return '\n'.join(hstrs)
+    if not isinstance(changes, dict):
+        return True, 'Invalid Changes data: {0}'.format(changes)
+
+    ret = changes.get('ret')
+    if ret is not None and changes.get('out') == 'highstate':
+        ctext = ''
+        changed = False
+        for host, hostdata in ret.iteritems():
+            s, c = _format_host(host, hostdata)
+            ctext += '\n' + '\n'.join((' ' * 14 + l) for l in s.splitlines())
+            changed = changed or c
+    else:
+        changed = True
+        opts = __opts__.copy()
+        # Pass the __opts__ dict. The loader will splat this modules __opts__ dict
+        # anyway so have to restore it after the other outputter is done
+        if __opts__['color']:
+            __opts__['color'] = 'CYAN'
+        __opts__['nested_indent'] = 14
+        ctext = '\n'
+        ctext += salt.output.out_format(
+                changes,
+                'nested',
+                __opts__)
+        __opts__ = opts
+    return changed, ctext
 
 
 def _strip_clean(returns):
@@ -217,16 +250,28 @@ def _strip_clean(returns):
     return returns
 
 
-def _format_terse(tcolor, comps, ret, colors):
+def _format_terse(tcolor, comps, ret, colors, tabular):
     '''
     Terse formatting of a message.
     '''
-    msg = (' {0}Name: {1} - Function: {2}.{3} - '
-           'Result: {4}{5}').format(tcolor,
-                                    comps[2],
-                                    comps[0],
-                                    comps[-1],
-                                    str(ret['result']),
-                                    colors['ENDC'])
-
+    result = "Clean"
+    if ret['changes']:
+        result = "Changed"
+    if ret['result'] is False:
+        result = "Failed"
+    elif ret['result'] is None:
+        result = "Differs"
+    if tabular is True:
+        fmt_string = '{0}{2:>10}.{3:<10} {4:7}   Name: {1}{5}'
+    elif isinstance(tabular, str):
+        fmt_string = tabular
+    else:
+        fmt_string = ' {0} Name: {1} - Function: {2}.{3} - Result: {4}{5}'
+    msg = fmt_string.format(tcolor,
+                            comps[2],
+                            comps[0],
+                            comps[-1],
+                            result,
+                            colors['ENDC'],
+                            ret)
     return msg

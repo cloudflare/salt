@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 '''
+Use the "reclass" database as a Pillar source
+
 .. |reclass| replace:: **reclass**
 
 This ``ext_pillar`` plugin provides access to the |reclass| database, such
@@ -17,7 +19,7 @@ inventory:
     ext_pillar:
         - reclass:
             storage_type: yaml_fs
-            base_inventory_uri: /srv/salt
+            inventory_base_uri: /srv/salt
 
 This would cause |reclass| to read the inventory from YAML files in
 ``/srv/salt/nodes`` and ``/srv/salt/classes``.
@@ -30,7 +32,7 @@ note of the differing data types for ``ext_pillar`` and ``master_tops``):
 
     reclass: &reclass
         storage_type: yaml_fs
-        base_inventory_uri: /srv/salt
+        inventory_base_uri: /srv/salt
         reclass_source_path: ~/code/reclass
 
     ext_pillar:
@@ -55,11 +57,14 @@ from salt.utils.reclass import (
     set_inventory_base_uri_default
 )
 
+# Define the module's virtual name
+__virtualname__ = 'reclass'
+
 
 def __virtual__(retry=False):
     try:
         import reclass
-        return 'reclass'
+        return __virtualname__
 
     except ImportError as e:
         if retry:

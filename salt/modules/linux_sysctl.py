@@ -16,6 +16,9 @@ from salt.modules.systemd import _sd_booted
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'sysctl'
+
 # TODO: Add unpersist() to remove either a sysctl or sysctl/value combo from
 # the config
 
@@ -28,7 +31,7 @@ def __virtual__():
         return False
     global _sd_booted
     _sd_booted = salt.utils.namespaced_function(_sd_booted, globals())
-    return 'sysctl'
+    return __virtualname__
 
 
 def default_config():
@@ -75,7 +78,8 @@ def show():
     '''
     cmd = 'sysctl -a'
     ret = {}
-    for line in __salt__['cmd.run_stdout'](cmd).splitlines():
+    out = __salt__['cmd.run_stdout'](cmd, output_loglevel='trace')
+    for line in out.splitlines():
         if not line or ' = ' not in line:
             continue
         comps = line.split(' = ', 1)

@@ -3,9 +3,6 @@
 Module for gathering and managing network information
 '''
 
-# Import python libs
-import re
-
 # Import salt libs
 import salt.utils
 
@@ -21,13 +18,16 @@ try:
 except ImportError:
     HAS_DEPENDENCIES = False
 
+# Define the module's virtual name
+__virtualname__ = 'network'
+
 
 def __virtual__():
     '''
     Only works on Windows systems
     '''
     if salt.utils.is_windows() and HAS_DEPENDENCIES is True:
-        return 'network'
+        return __virtualname__
     return False
 
 
@@ -56,7 +56,7 @@ def netstat():
         salt '*' network.netstat
     '''
     ret = []
-    cmd = 'netstat -na'
+    cmd = 'netstat -nao'
     lines = __salt__['cmd.run'](cmd).splitlines()
     for line in lines:
         comps = line.split()
@@ -65,13 +65,15 @@ def netstat():
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': comps[3]})
+                'state': comps[3],
+                'program': comps[4]})
         if line.startswith('  UDP'):
             ret.append({
                 'local-address': comps[1],
                 'proto': comps[0],
                 'remote-address': comps[2],
-                'state': None})
+                'state': None,
+                'program': comps[3]})
     return ret
 
 

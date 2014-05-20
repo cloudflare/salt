@@ -4,6 +4,7 @@ Return/control aspects of the grains data
 '''
 
 # Import python libs
+from __future__ import print_function
 import collections
 import math
 import operator
@@ -14,6 +15,9 @@ import yaml
 # Import salt libs
 import salt.utils
 import salt.utils.dictupdate
+from salt.exceptions import SaltException
+
+__proxyenabled__ = ['*']
 
 # Seed the grains dict so cython will build
 __grains__ = {}
@@ -78,6 +82,27 @@ def get(key, default=''):
     return salt.utils.traverse_dict(__grains__, key, default)
 
 
+def has_value(key):
+    '''
+    Determine whether a named value exists in the grains dictionary.
+
+    Given a grains dictionary that contains the following structure::
+
+        {'pkg': {'apache': 'httpd'}}
+
+    One would determine if the apache key in the pkg dict exists by::
+
+        pkg:apache
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' grains.has_value pkg:apache
+    '''
+    return True if salt.utils.traverse_dict(__grains__, key, False) else False
+
+
 def items(sanitize=False):
     '''
     Return all of the minion's grains
@@ -134,9 +159,11 @@ def item(*args, **kwargs):
     return ret
 
 
-def setval(key, val):
+def setval(key, val, destructive=False):
     '''
     Set a grains value in the grains config file
+
+    :param Destructive: If an operation results in a key being removed, delete the key, too. Defaults to False.
 
     CLI Example:
 
@@ -170,7 +197,12 @@ def setval(key, val):
                 return 'Unable to read existing grains file: {0}'.format(e)
         if not isinstance(grains, dict):
             grains = {}
-    grains[key] = val
+    if val is None and destructive is True:
+        print('SETVAL DESTRUCTIVE ')
+        if key in grains:
+            del grains[key]
+    else:
+        grains[key] = val
     # Cast defaultdict to dict; is there a more central place to put this?
     yaml.representer.SafeRepresenter.add_representer(collections.defaultdict,
             yaml.representer.SafeRepresenter.represent_dict)
@@ -228,11 +260,13 @@ def remove(key, val):
     return setval(key, grains)
 
 
-def delval(key):
+def delval(key, destructive=False):
     '''
     .. versionadded:: 0.17.0
 
     Delete a grain from the grains config file
+
+    :param Destructive: Delete the key, too. Defaults to False.
 
     CLI Example:
 
@@ -240,7 +274,8 @@ def delval(key):
 
         salt '*' grains.delval key
     '''
-    setval(key, None)
+
+    setval(key, None, destructive=destructive)
 
 
 def ls():  # pylint: disable=C0103
@@ -256,7 +291,7 @@ def ls():  # pylint: disable=C0103
     return sorted(__grains__)
 
 
-def filter_by(lookup_dict, grain='os_family', merge=None):
+def filter_by(lookup_dict, grain='os_family', merge=None, default='default'):
     '''
     .. versionadded:: 0.17.0
 
@@ -272,6 +307,7 @@ def filter_by(lookup_dict, grain='os_family', merge=None):
         {% set apache = salt['grains.filter_by']({
             'Debian': {'pkg': 'apache2', 'srv': 'apache2'},
             'RedHat': {'pkg': 'httpd', 'srv': 'httpd'},
+            'default': 'Debian',
         }) %}
 
         myapache:
@@ -316,17 +352,37 @@ def filter_by(lookup_dict, grain='os_family', merge=None):
         values for non-standard package names such as when using a different
         Python version from the default Python version provided by the OS
         (e.g., ``python26-mysql`` instead of ``python-mysql``).
+    :param default: default lookup_dict's key used if the grain does not exists
+         or if the grain value has no match on lookup_dict.
+
+         .. versionadded:: 2014.1
 
     CLI Example:
 
     .. code-block:: bash
 
         salt '*' grains.filter_by '{Debian: Debheads rule, RedHat: I love my hat}'
+        # this one will render {D: {E: I, G: H}, J: K}
+        salt '*' grains.filter_by '{A: B, C: {D: {E: F,G: H}}}' 'xxx' '{D: {E: I},J: K}' 'C'
     '''
-    ret = lookup_dict.get(__grains__[grain], None)
+    ret = lookup_dict.get(
+            __grains__.get(
+                grain, default),
+            lookup_dict.get(
+                default, None)
+            )
 
     if merge:
-        salt.utils.dictupdate.update(ret, merge)
+        if not isinstance(merge, collections.Mapping):
+            raise SaltException('filter_by merge argument must be a dictionary.')
+
+        else:
+
+            if ret is None:
+                ret = merge
+
+            else:
+                salt.utils.dictupdate.update(ret, merge)
 
     return ret
 

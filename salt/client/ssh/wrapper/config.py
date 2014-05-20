@@ -76,7 +76,10 @@ def manage_mode(mode):
     '''
     if mode is None:
         return None
-    return str(mode).lstrip('0').zfill(3)
+    ret = str(mode).lstrip('0').zfill(4)
+    if ret[0] != '0':
+        return '0{0}'.format(ret)
+    return ret
 
 
 def valid_fileproto(uri):
@@ -181,7 +184,7 @@ def merge(value,
 
 def get(key, default=''):
     '''
-    .. versionadded: 0.14
+    .. versionadded: 0.14.0
 
     Attempt to retrieve the named value from opts, pillar, grains of the master
     config, if the named value is not available return the passed default.

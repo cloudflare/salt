@@ -21,11 +21,14 @@ try:
 except ImportError:
     HAS_REDIS = False
 
+# Define the module's virtual name
+__virtualname__ = 'redis'
+
 
 def __virtual__():
     if not HAS_REDIS:
         return False
-    return 'redis'
+    return __virtualname__
 
 
 def _get_serv():
@@ -105,7 +108,7 @@ def get_jids():
     Return a list of all job ids
     '''
     serv = _get_serv()
-    return serv.smembers('jids')
+    return list(serv.smembers('jids'))
 
 
 def get_minions():
@@ -113,4 +116,4 @@ def get_minions():
     Return a list of minions
     '''
     serv = _get_serv()
-    return serv.smembers('minions')
+    return list(serv.smembers('minions'))

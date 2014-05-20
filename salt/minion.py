@@ -4,8 +4,8 @@ Routines to set up a minion
 '''
 
 # Import python libs
+from __future__ import print_function
 import logging
-import getpass
 import multiprocessing
 import fnmatch
 import copy
@@ -18,7 +18,9 @@ import time
 import traceback
 import sys
 import signal
+import errno
 from random import randint
+import salt
 
 # Import third party libs
 try:
@@ -53,7 +55,7 @@ except ImportError:
 # Import salt libs
 from salt.exceptions import (
     AuthenticationError, CommandExecutionError, CommandNotFoundError,
-    SaltInvocationError, SaltReqTimeoutError, SaltClientError
+    SaltInvocationError, SaltReqTimeoutError, SaltClientError, SaltSystemExit
 )
 import salt.client
 import salt.crypt
@@ -61,9 +63,12 @@ import salt.loader
 import salt.utils
 import salt.payload
 import salt.utils.schedule
+import salt.utils.event
+
 from salt._compat import string_types
 from salt.utils.debug import enable_sigusr1_handler
 from salt.utils.event import tagify
+import salt.syspaths
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +116,11 @@ def resolve_dns(opts):
                         pass
             else:
                 ret['master_ip'] = '127.0.0.1'
+        except SaltSystemExit:
+            err = 'Master address: {0} could not be resolved. Invalid or unresolveable address.'.format(
+                opts.get('master', 'Unknown'))
+            log.error(err)
+            raise SaltSystemExit(code=42, msg=err)
     else:
         ret['master_ip'] = '127.0.0.1'
 
@@ -142,24 +152,47 @@ def parse_args_and_kwargs(func, args, data=None):
     This is to prevent things like 'echo "Hello: world"' to be parsed as
     dictionaries.
     '''
-    spec_args, _, has_kwargs, _ = salt.utils.get_function_argspec(func)
+    argspec = salt.utils.get_function_argspec(func)
     _args = []
     kwargs = {}
+    invalid_kwargs = []
+
     for arg in args:
         if isinstance(arg, string_types):
             arg_name, arg_value = salt.utils.parse_kwarg(arg)
             if arg_name:
-                if has_kwargs or arg_name in spec_args:
+                if argspec.keywords or arg_name in argspec.args:
+                    # Function supports **kwargs or is a positional argument to
+                    # the function.
                     kwargs[arg_name] = yamlify_arg(arg_value)
                     continue
-            else:
-                # Not a kwarg
-                pass
+
+                # **kwargs not in argspec and parsed argument name not in
+                # list of positional arguments. This keyword argument is
+                # invalid.
+                invalid_kwargs.append(arg)
+
+        # if the arg is a dict with __kwarg__ == True, then its a kwarg
+        elif isinstance(arg, dict) and arg.get('__kwarg__') is True:
+            for key, val in arg.iteritems():
+                if key == '__kwarg__':
+                    continue
+                if isinstance(val, string_types):
+                    kwargs[key] = yamlify_arg(val)
+                else:
+                    kwargs[key] = val
+            continue
         _args.append(yamlify_arg(arg))
-    if has_kwargs and isinstance(data, dict):
+    if argspec.keywords and isinstance(data, dict):
         # this function accepts **kwargs, pack in the publish data
         for key, val in data.items():
             kwargs['__pub_{0}'.format(key)] = val
+
+    if invalid_kwargs:
+        raise SaltInvocationError(
+            'The following keyword arguments are not valid: {0}'
+            .format(', '.join(invalid_kwargs))
+        )
     return _args, kwargs
 
 
@@ -170,24 +203,40 @@ def yamlify_arg(arg):
     if not isinstance(arg, string_types):
         return arg
     try:
-        original_arg = str(arg)
-        if isinstance(arg, string_types):
-            if '\n' not in arg:
-                arg = yaml.safe_load(arg)
+        # Explicit late import to avoid circular import. DO NOT MOVE THIS.
+        import salt.utils.yamlloader as yamlloader
+        original_arg = arg
+        if '#' in arg:
+            # Don't yamlify this argument or the '#' and everything after
+            # it will be interpreted as a comment.
+            return arg
+        if arg == 'None':
+            arg = None
+        elif '\n' not in arg:
+            arg = yamlloader.load(arg, Loader=yamlloader.CustomLoader)
+
         if isinstance(arg, dict):
             # dicts must be wrapped in curly braces
-            if (isinstance(original_arg, string_types) and
-                    not original_arg.startswith('{')):
+            if not original_arg.startswith('{'):
                 return original_arg
             else:
                 return arg
-        elif isinstance(arg, (int, list, string_types)):
+
+        elif arg is None or isinstance(arg, (int, list, float, string_types)):
             # yaml.safe_load will load '|' as '', don't let it do that.
             if arg == '' and original_arg in ('|',):
                 return original_arg
             # yaml.safe_load will treat '#' as a comment, so a value of '#'
             # will become None. Keep this value from being stomped as well.
             elif arg is None and original_arg.strip().startswith('#'):
+                return original_arg
+            elif arg is None and original_arg.strip() == '':
+                # Because YAML loads empty strings as None, we return the original string
+                # >>> import yaml
+                # >>> yaml.load('') is None
+                # True
+                # >>> yaml.load('      ') is None
+                # True
                 return original_arg
             else:
                 return arg
@@ -207,16 +256,14 @@ class SMinion(object):
     functions for general use.
     '''
     def __init__(self, opts):
-        # Generate all of the minion side components
-        self.opts = opts
-        # Late setup the of the opts grains, so we can log from the grains
-        # module
+        # Late setup of the opts grains, so we can log from the grains module
         opts['grains'] = salt.loader.grains(opts)
         self.opts = opts
+
+        # Clean out the proc directory (default /var/cache/salt/minion/proc)
         if self.opts.get('file_client', 'remote') == 'remote':
             if isinstance(self.opts['master'], list):
                 masters = self.opts['master']
-                self.opts['_auth_timeout'] = 3
                 self.opts['_safe_auth'] = False
                 for master in masters:
                     self.opts['master'] = master
@@ -346,7 +393,10 @@ class MultiMinion(object):
         #
         # Start with the publish socket
         self.context = zmq.Context()
-        id_hash = hashlib.md5(self.opts['id']).hexdigest()
+        hash_type = getattr(hashlib, self.opts.get('hash_type', 'md5'))
+        id_hash = hash_type(self.opts['id']).hexdigest()
+        if self.opts.get('hash_type', 'md5') == 'sha256':
+            id_hash = id_hash[:10]
         epub_sock_path = os.path.join(
             self.opts['sock_dir'],
             'minion_event_{0}_pub.ipc'.format(id_hash)
@@ -434,6 +484,11 @@ class MultiMinion(object):
                             module_refresh = True
                         elif package.startswith('pillar_refresh'):
                             pillar_refresh = True
+                        elif package.startswith('fire_master'):
+                            tag, data = salt.utils.event.MinionEvent.unpack(package)
+                            log.debug("Forwarding master event tag={tag}".format(tag=data['tag']))
+                            self._fire_master(data['data'], data['tag'], data['events'], data['pretag'])
+
                         self.epub_sock.send(package)
                 except Exception:
                     pass
@@ -447,7 +502,7 @@ class MultiMinion(object):
                         try:
                             if not isinstance(minion, dict):
                                 minions[master] = {'minion': minion}
-                            t_minion = Minion(minion, 1, False)
+                            t_minion = Minion(minion, 5, False)
                             minions[master]['minion'] = t_minion
                             minions[master]['generator'] = t_minion.tune_in_no_block()
                             auth_wait = self.opts['acceptance_wait_time']
@@ -471,6 +526,7 @@ class Minion(object):
         '''
         Pass in the options dict
         '''
+        self._running = None
 
         # Warn if ZMQ < 3.2
         if HAS_ZMQ and (not(hasattr(zmq, 'zmq_version_info')) or
@@ -493,8 +549,8 @@ class Minion(object):
             opts['environment'],
         ).compile_pillar()
         self.serial = salt.payload.Serial(self.opts)
-        self.mod_opts = self.__prep_mod_opts()
-        self.functions, self.returners = self.__load_modules()
+        self.mod_opts = self._prep_mod_opts()
+        self.functions, self.returners = self._load_modules()
         self.matcher = Matcher(self.opts, self.functions)
         self.proc_dir = get_proc_dir(opts['cachedir'])
         self.schedule = salt.utils.schedule.Schedule(
@@ -502,7 +558,24 @@ class Minion(object):
             self.functions,
             self.returners)
 
-    def __prep_mod_opts(self):
+        self.grains_cache = self.opts['grains']
+
+        if 'proxy' in self.opts['pillar']:
+            log.debug('I am {0} and I need to start some proxies for {0}'.format(self.opts['id'],
+                                                                                 self.opts['pillar']['proxy']))
+            for p in self.opts['pillar']['proxy']:
+                log.debug('Starting {0} proxy.'.format(p))
+                pid = os.fork()
+                if pid > 0:
+                    continue
+                else:
+                    proxyminion = salt.ProxyMinion()
+                    proxyminion.start(self.opts['pillar']['proxy'][p])
+                    self.clean_die(signal.SIGTERM, None)
+        else:
+            log.debug("I am {0} and I am not supposed to start any proxies.".format(self.opts['id']))
+
+    def _prep_mod_opts(self):
         '''
         Returns a copy of the opts with key bits stripped out
         '''
@@ -513,7 +586,7 @@ class Minion(object):
             mod_opts[key] = val
         return mod_opts
 
-    def __load_modules(self):
+    def _load_modules(self):
         '''
         Return the functions and the returners loaded up from the loader
         module
@@ -547,11 +620,12 @@ class Minion(object):
 
     def _fire_master(self, data=None, tag=None, events=None, pretag=None):
         '''
-        Fire an event on the master
+        Fire an event on the master, or drop message if unable to send.
         '''
         load = {'id': self.opts['id'],
                 'cmd': '_minion_event',
-                'pretag': pretag}
+                'pretag': pretag,
+                'tok': self.tok}
         if events:
             load['events'] = events
         elif data and tag:
@@ -561,9 +635,16 @@ class Minion(object):
             return
         sreq = salt.payload.SREQ(self.opts['master_uri'])
         try:
-            sreq.send('aes', self.crypticle.dumps(load))
+            result = sreq.send('aes', self.crypticle.dumps(load))
+            try:
+                data = self.crypticle.loads(result)
+            except AuthenticationError:
+                log.info("AES key changed, re-authenticating")
+                # We can't decode the master's response to our event,
+                # so we will need to re-authenticate.
+                self.authenticate()
         except Exception:
-            pass
+            log.info("fire_master failed: {0}".format(traceback.format_exc()))
 
     def _handle_payload(self, payload):
         '''
@@ -572,13 +653,21 @@ class Minion(object):
         '''
         {'aes': self._handle_aes,
          'pub': self._handle_pub,
-         'clear': self._handle_clear}[payload['enc']](payload['load'])
+         'clear': self._handle_clear}[payload['enc']](payload['load'],
+                                                      payload['sig'] if 'sig' in payload else None)
 
-    def _handle_aes(self, load):
+    def _handle_aes(self, load, sig=None):
         '''
-        Takes the AES encrypted load, decrypts it, and runs the encapsulated
-        instructions
+        Takes the AES encrypted load, checks the signature if pub signatures
+        are turned on, decrypts it, and runs the encapsulated instructions
         '''
+        # Verify that the signature is valid
+        master_pubkey_path = os.path.join(self.opts['pki_dir'], 'minion_master.pub')
+
+        if sig and self.functions['config.get']('sign_pub_messages'):
+            if not salt.crypt.verify_signature(master_pubkey_path, load, sig):
+                raise AuthenticationError('Message signature failed to validate.')
+
         try:
             data = self.crypticle.loads(load)
         except AuthenticationError:
@@ -591,11 +680,19 @@ class Minion(object):
 
             self.authenticate()
             data = self.crypticle.loads(load)
+
         # Verify that the publication is valid
         if 'tgt' not in data or 'jid' not in data or 'fun' not in data \
            or 'arg' not in data:
             return
         # Verify that the publication applies to this minion
+
+        # It's important to note that the master does some pre-processing
+        # to determine which minions to send a request to. So for example,
+        # a "salt -G 'grain_key:grain_val' test.ping" will invoke some
+        # pre-processing on the master and this minion should not see the
+        # publication if the master does not determine that it should.
+
         if 'tgt_type' in data:
             match_func = getattr(self.matcher,
                                  '{0}_match'.format(data['tgt_type']), None)
@@ -640,7 +737,7 @@ class Minion(object):
         '''
         if isinstance(data['fun'], string_types):
             if data['fun'] == 'sys.reload_modules':
-                self.functions, self.returners = self.__load_modules()
+                self.functions, self.returners = self._load_modules()
                 self.schedule.functions = self.functions
                 self.schedule.returners = self.returners
         if isinstance(data['fun'], tuple) or isinstance(data['fun'], list):
@@ -662,10 +759,12 @@ class Minion(object):
             )
         else:
             process = threading.Thread(
-                target=target, args=(instance, self.opts, data)
+                target=target, args=(instance, self.opts, data),
+                name=data['jid']
             )
         process.start()
-        process.join()
+        if not sys.platform.startswith('win'):
+            process.join()
 
     @classmethod
     def _thread_return(cls, minion_instance, opts, data):
@@ -677,13 +776,13 @@ class Minion(object):
         # multiprocessing communication.
         if not minion_instance:
             minion_instance = cls(opts)
+        fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
         if opts['multiprocessing']:
-            fn_ = os.path.join(minion_instance.proc_dir, data['jid'])
             salt.utils.daemonize_if(opts)
-            sdata = {'pid': os.getpid()}
-            sdata.update(data)
-            with salt.utils.fopen(fn_, 'w+') as fp_:
-                fp_.write(minion_instance.serial.dumps(sdata))
+        sdata = {'pid': os.getpid()}
+        sdata.update(data)
+        with salt.utils.fopen(fn_, 'w+b') as fp_:
+            fp_.write(minion_instance.serial.dumps(sdata))
         ret = {'success': False}
         function_name = data['fun']
         if function_name in minion_instance.functions:
@@ -720,6 +819,7 @@ class Minion(object):
                 )
                 log.debug(msg, exc_info=True)
                 ret['return'] = '{0}: {1}'.format(msg, exc)
+                ret['out'] = 'nested'
             except CommandExecutionError as exc:
                 log.error(
                     'A command in {0!r} had a problem: {1}'.format(
@@ -729,6 +829,7 @@ class Minion(object):
                     exc_info=log.isEnabledFor(logging.DEBUG)
                 )
                 ret['return'] = 'ERROR: {0}'.format(exc)
+                ret['out'] = 'nested'
             except SaltInvocationError as exc:
                 log.error(
                     'Problem executing {0!r}: {1}'.format(
@@ -740,6 +841,7 @@ class Minion(object):
                 ret['return'] = 'ERROR executing {0!r}: {1}'.format(
                     function_name, exc
                 )
+                ret['out'] = 'nested'
             except TypeError as exc:
                 trb = traceback.format_exc()
                 aspec = salt.utils.get_function_argspec(
@@ -752,12 +854,15 @@ class Minion(object):
                                                        aspec)
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = msg
+                ret['out'] = 'nested'
             except Exception:
                 msg = 'The minion function caused an exception'
                 log.warning(msg, exc_info=log.isEnabledFor(logging.DEBUG))
                 ret['return'] = '{0}: {1}'.format(msg, traceback.format_exc())
+                ret['out'] = 'nested'
         else:
             ret['return'] = '{0!r} is not available.'.format(function_name)
+            ret['out'] = 'nested'
 
         ret['jid'] = data['jid']
         ret['fun'] = data['fun']
@@ -858,17 +963,30 @@ class Minion(object):
                     'id': self.opts['id']}
             for key, value in ret.items():
                 load[key] = value
-        try:
-            if hasattr(self.functions[ret['fun']], '__outputter__'):
-                oput = self.functions[ret['fun']].__outputter__
+
+        if 'out' in ret:
+            if isinstance(ret['out'], string_types):
+                load['out'] = ret['out']
+            else:
+                log.error('Invalid outputter {0}. This is likely a bug.'
+                          .format(ret['out']))
+        else:
+            try:
+                oput = self.functions[fun].__outputter__
+            except (KeyError, AttributeError, TypeError):
+                pass
+            else:
                 if isinstance(oput, string_types):
                     load['out'] = oput
-        except KeyError:
-            pass
         try:
             ret_val = sreq.send('aes', self.crypticle.dumps(load))
         except SaltReqTimeoutError:
-            ret_val = ''
+            msg = ('The minion failed to return the job information for job '
+                   '{0}. This is often due to the master being shut down or '
+                   'overloaded. If the master is running consider incresing '
+                   'the worker_threads value.').format(jid)
+            log.warn(msg)
+            return ''
         if isinstance(ret_val, string_types) and not ret_val:
             # The master AES key has changed, reauth
             self.authenticate()
@@ -883,7 +1001,7 @@ class Minion(object):
             jdir = os.path.dirname(fn_)
             if not os.path.isdir(jdir):
                 os.makedirs(jdir)
-            salt.utils.fopen(fn_, 'w+').write(self.serial.dumps(ret))
+            salt.utils.fopen(fn_, 'w+b').write(self.serial.dumps(ret))
         return ret_val
 
     def _state_run(self):
@@ -891,7 +1009,7 @@ class Minion(object):
         Execute a state run based on information set in the minion config file
         '''
         if self.opts['startup_states']:
-            data = {'jid': 'req', 'ret': self.opts['ext_job_cache']}
+            data = {'jid': 'req', 'ret': self.opts.get('ext_job_cache', '')}
             if self.opts['startup_states'] == 'sls':
                 data['fun'] = 'state.sls'
                 data['arg'] = [self.opts['sls_list']]
@@ -902,6 +1020,24 @@ class Minion(object):
                 data['fun'] = 'state.highstate'
                 data['arg'] = []
             self._handle_decoded_payload(data)
+
+    def _refresh_grains_watcher(self, refresh_interval_in_minutes):
+        '''
+        Create a loop that will fire a pillar refresh to inform a master about a change in the grains of this minion
+        :param refresh_interval_in_minutes:
+        :return: None
+        '''
+        if '__update_grains' not in self.opts.get('schedule', {}):
+            if not 'schedule' in self.opts:
+                self.opts['schedule'] = {}
+            self.opts['schedule'].update({
+                '__update_grains':
+                    {
+                        'function': 'event.fire',
+                        'args': [{}, "grains_refresh"],
+                        'minutes': refresh_interval_in_minutes
+                    }
+            })
 
     @property
     def master_pub(self):
@@ -924,6 +1060,7 @@ class Minion(object):
             )
         )
         auth = salt.crypt.Auth(self.opts)
+        self.tok = auth.gen_token('salt')
         acceptance_wait_time = self.opts['acceptance_wait_time']
         acceptance_wait_time_max = self.opts['acceptance_wait_time_max']
         if not acceptance_wait_time_max:
@@ -946,7 +1083,7 @@ class Minion(object):
         '''
         Refresh the functions and returners.
         '''
-        self.functions, self.returners = self.__load_modules()
+        self.functions, self.returners = self._load_modules()
         self.schedule.functions = self.functions
         self.schedule.returners = self.returners
 
@@ -967,18 +1104,34 @@ class Minion(object):
         Python does not handle the SIGTERM cleanly, if it is signaled exit
         the minion process cleanly
         '''
+        self._running = False
         exit(0)
 
-    # Main Minion Tune In
-    def tune_in(self):
+    def _pre_tune(self):
         '''
-        Lock onto the publisher. This is the main event loop for the minion
+        Set the minion running flag and issue the appropriate warnings if
+        the minion cannot be started or is already running
         '''
+        if self._running is None:
+            self._running = True
+        elif self._running is False:
+            log.error(
+                'This {0} was scheduled to stop. Not running '
+                '{0}.tune_in()'.format(self.__class__.__name__)
+            )
+            return
+        elif self._running is True:
+            log.error(
+                'This {0} is already running. Not running '
+                '{0}.tune_in()'.format(self.__class__.__name__)
+            )
+            return
+
         try:
             log.info(
                 '{0} is starting as user \'{1}\''.format(
                     self.__class__.__name__,
-                    getpass.getuser()
+                    salt.utils.get_user()
                 )
             )
         except Exception as err:
@@ -991,14 +1144,29 @@ class Minion(object):
                 ),
                 exc_info=err
             )
+
+    # Main Minion Tune In
+    def tune_in(self):
+        '''
+        Lock onto the publisher. This is the main event loop for the minion
+        :rtype : None
+        '''
+
+        self._pre_tune()
+
+        # Properly exit if a SIGTERM is signalled
         signal.signal(signal.SIGTERM, self.clean_die)
-        log.debug('Minion "{0}" trying to tune in'.format(self.opts['id']))
+
+        log.debug('Minion {0!r} trying to tune in'.format(self.opts['id']))
         self.context = zmq.Context()
 
         # Prepare the minion event system
         #
         # Start with the publish socket
-        id_hash = hashlib.md5(self.opts['id']).hexdigest()
+        hash_type = getattr(hashlib, self.opts.get('hash_type', 'md5'))
+        id_hash = hash_type(self.opts['id']).hexdigest()
+        if self.opts.get('hash_type', 'md5') == 'sha256':
+            id_hash = id_hash[:10]
         epub_sock_path = os.path.join(
             self.opts['sock_dir'],
             'minion_event_{0}_pub.ipc'.format(id_hash)
@@ -1031,6 +1199,33 @@ class Minion(object):
             )
         )
 
+        # Check to make sure the sock_dir is available, create if not
+        default_minion_sock_dir = os.path.join(
+            salt.syspaths.SOCK_DIR,
+            'minion'
+        )
+        minion_sock_dir = self.opts.get('sock_dir', default_minion_sock_dir)
+
+        if not os.path.isdir(minion_sock_dir):
+            # Let's try to create the directory defined on the configuration
+            # file
+            try:
+                os.makedirs(minion_sock_dir, 0755)
+            except OSError as exc:
+                log.error('Could not create SOCK_DIR: {0}'.format(exc))
+                # Let's not fail yet and try using the default path
+                if minion_sock_dir == default_minion_sock_dir:
+                    # We're already trying the default system path, stop now!
+                    raise
+
+            if not os.path.isdir(default_minion_sock_dir):
+                try:
+                    os.makedirs(default_minion_sock_dir, 0755)
+                except OSError as exc:
+                    log.error('Could not create SOCK_DIR: {0}'.format(exc))
+                    # Let's stop at this stage
+                    raise
+
         # Create the pull socket
         self.epull_sock = self.context.socket(zmq.PULL)
         # Bind the event sockets
@@ -1048,7 +1243,6 @@ class Minion(object):
             )
 
         self.poller = zmq.Poller()
-        self.epoller = zmq.Poller()
         self.socket = self.context.socket(zmq.SUB)
         self.socket.setsockopt(zmq.SUBSCRIBE, '')
         self.socket.setsockopt(zmq.IDENTITY, self.opts['id'])
@@ -1097,7 +1291,7 @@ class Minion(object):
             )
         self.socket.connect(self.master_pub)
         self.poller.register(self.socket, zmq.POLLIN)
-        self.epoller.register(self.epull_sock, zmq.POLLIN)
+        self.poller.register(self.epull_sock, zmq.POLLIN)
         # Send an event to the master that the minion is live
         self._fire_master(
             'Minion {0} started at {1}'.format(
@@ -1125,7 +1319,30 @@ class Minion(object):
         time.sleep(.5)
 
         loop_interval = int(self.opts['loop_interval'])
-        while True:
+
+        try:
+            if self.opts['grains_refresh_every']:  # If exists and is not zero. In minutes, not seconds!
+                if self.opts['grains_refresh_every'] > 1:
+                    log.debug(
+                        'Enabling the grains refresher. Will run every {0} minutes.'.format(
+                            self.opts['grains_refresh_every'])
+                    )
+                else:  # Clean up minute vs. minutes in log message
+                    log.debug(
+                        'Enabling the grains refresher. Will run every {0} minute.'.format(
+                            self.opts['grains_refresh_every'])
+
+                    )
+                self._refresh_grains_watcher(
+                    abs(self.opts['grains_refresh_every'])
+                )
+        except Exception as exc:
+            log.error(
+                'Exception occurred in attempt to initialize grain refresh routine during minion tune-in: {0}'.format(
+                    exc)
+            )
+
+        while self._running is True:
             try:
                 self.schedule.eval()
                 # Check if scheduler requires lower loop interval than
@@ -1140,28 +1357,46 @@ class Minion(object):
                     'Exception {0} occurred in scheduled job'.format(exc)
                 )
             try:
+                log.trace("Check main poller timeout %s" % loop_interval)
                 socks = dict(self.poller.poll(
                     loop_interval * 1000)
                 )
-                if self.socket in socks and socks[self.socket] == zmq.POLLIN:
-                    payload = self.serial.loads(self.socket.recv())
+                if socks.get(self.socket) == zmq.POLLIN:
+                    payload = self.serial.loads(self.socket.recv(zmq.NOBLOCK))
+                    log.trace("Handling payload")
                     self._handle_payload(payload)
+
                 # Check the event system
-                if self.epoller.poll(1):
+                if socks.get(self.epull_sock) == zmq.POLLIN:
+                    package = self.epull_sock.recv(zmq.NOBLOCK)
+                    log.debug("Handling event %r", package)
                     try:
-                        while True:
-                            package = self.epull_sock.recv(zmq.NOBLOCK)
-                            if package.startswith('module_refresh'):
-                                self.module_refresh()
-                            elif package.startswith('pillar_refresh'):
+                        if package.startswith('module_refresh'):
+                            self.module_refresh()
+                        elif package.startswith('pillar_refresh'):
+                            self.pillar_refresh()
+                        elif package.startswith('grains_refresh'):
+                            if self.grains_cache != self.opts['grains']:
                                 self.pillar_refresh()
-                            self.epub_sock.send(package)
+                                self.grains_cache = self.opts['grains']
+                        elif package.startswith('fire_master'):
+                            tag, data = salt.utils.event.MinionEvent.unpack(package)
+                            log.debug("Forwarding master event tag={tag}".format(tag=data['tag']))
+                            self._fire_master(data['data'], data['tag'], data['events'], data['pretag'])
+
+                        self.epub_sock.send(package)
                     except Exception:
-                        pass
-            except zmq.ZMQError:
-                # This is thrown by the interrupt caused by python handling the
-                # SIGCHLD. This is a safe error and we just start the poll
-                # again
+                        log.debug("Exception while handling events", exc_info=True)
+
+            except zmq.ZMQError as exc:
+                # The interrupt caused by python handling the
+                # SIGCHLD. Throws this error with errno == EINTR.
+                # Nothing to recieve on the zmq socket throws this error
+                # with EAGAIN.
+                # Both are safe to ignore
+                if exc.errno != errno.EAGAIN and exc.errno != errno.EINTR:
+                    log.critical('Unexpected ZMQError while polling minion',
+                                 exc_info=True)
                 continue
             except Exception:
                 log.critical(
@@ -1175,6 +1410,7 @@ class Minion(object):
         management of the event bus assuming that these are handled outside
         the tune_in sequence
         '''
+        self._pre_tune()
         self.context = zmq.Context()
         self.poller = zmq.Poller()
         self.socket = self.context.socket(zmq.SUB)
@@ -1219,7 +1455,12 @@ class Minion(object):
             tagify([self.opts['id'], 'start'], 'minion'),
         )
         loop_interval = int(self.opts['loop_interval'])
-        while True:
+
+        # On first startup execute a state run if configured to do so
+        self._state_run()
+        time.sleep(.5)
+
+        while self._running is True:
             try:
                 socks = dict(self.poller.poll(
                     loop_interval * 1000)
@@ -1242,6 +1483,7 @@ class Minion(object):
         '''
         Tear down the minion
         '''
+        self._running = False
         if hasattr(self, 'poller'):
             if isinstance(self.poller.sockets, dict):
                 for socket in self.poller.sockets.keys():
@@ -1254,17 +1496,6 @@ class Minion(object):
                         socket[0].close()
                     self.poller.unregister(socket[0])
 
-        if hasattr(self, 'epoller'):
-            if isinstance(self.epoller.sockets, dict):
-                for socket in self.epoller.sockets.keys():
-                    if socket.closed is False:
-                        socket.close()
-                    self.epoller.unregister(socket)
-            else:
-                for socket in self.epoller.sockets:
-                    if socket[0].closed is False:
-                        socket[0].close()
-                    self.epoller.unregister(socket[0])
         if hasattr(self, 'epub_sock') and self.epub_sock.closed is False:
             self.epub_sock.close()
         if hasattr(self, 'epull_sock') and self.epull_sock.closed is False:
@@ -1289,7 +1520,7 @@ class Syndic(Minion):
         opts['loop_interval'] = 1
         Minion.__init__(self, opts)
 
-    def _handle_aes(self, load):
+    def _handle_aes(self, load, sig=None):
         '''
         Takes the AES encrypted load, decrypts it, and runs the encapsulated
         instructions
@@ -1573,7 +1804,7 @@ class Matcher(object):
         '''
         if tgt not in self.functions:
             return False
-        return(self.functions[tgt]())
+        return self.functions[tgt]()
 
     def pillar_match(self, tgt, delim=':'):
         '''
@@ -1619,10 +1850,10 @@ class Matcher(object):
             range_ = seco.range.Range(self.opts['range_server'])
             try:
                 return self.opts['grains']['fqdn'] in range_.expand(tgt)
-            except seco.range.RangeException as e:
-                log.debug('Range exception in compound match: {0}'.format(e))
+            except seco.range.RangeException as exc:
+                log.debug('Range exception in compound match: {0}'.format(exc))
                 return False
-        return
+        return False
 
     def compound_match(self, tgt):
         '''
@@ -1679,7 +1910,7 @@ class Matcher(object):
                 results.append(str(self.glob_match(match)))
         results = ' '.join(results)
         try:
-            return eval(results)
+            return eval(results)  # pylint: disable=W0123
         except Exception:
             log.error('Invalid compound target: {0}'.format(tgt))
             return False
@@ -1696,3 +1927,62 @@ class Matcher(object):
                 salt.utils.minions.nodegroup_comp(tgt, nodegroups)
             )
         return False
+
+
+class ProxyMinion(Minion):
+    '''
+    This class instantiates a 'proxy' minion--a minion that does not manipulate
+    the host it runs on, but instead manipulates a device that cannot run a minion.
+    '''
+    def __init__(self, opts, timeout=60, safe=True):  # pylint: disable=W0231
+        '''
+        Pass in the options dict
+        '''
+
+        # Warn if ZMQ < 3.2
+        if HAS_ZMQ and (not(hasattr(zmq, 'zmq_version_info')) or
+                        zmq.zmq_version_info() < (3, 2)):
+            # PyZMQ 2.1.9 does not have zmq_version_info
+            log.warning('You have a version of ZMQ less than ZMQ 3.2! There '
+                        'are known connection keep-alive issues with ZMQ < '
+                        '3.2 which may result in loss of contact with '
+                        'minions. Please upgrade your ZMQ!')
+        # Late setup the of the opts grains, so we can log from the grains
+        # module
+        # print opts['proxymodule']
+        fq_proxyname = 'proxy.'+opts['proxy']['proxytype']
+        self.proxymodule = salt.loader.proxy(opts, fq_proxyname)
+        opts['proxyobject'] = self.proxymodule[opts['proxy']['proxytype']+'.Proxyconn'](opts['proxy'])
+        opts['id'] = opts['proxyobject'].id(opts)
+        opts.update(resolve_dns(opts))
+        self.opts = opts
+        self.authenticate(timeout, safe)
+        self.opts['pillar'] = salt.pillar.get_pillar(
+            opts,
+            opts['grains'],
+            opts['id'],
+            opts['environment'],
+        ).compile_pillar()
+        self.serial = salt.payload.Serial(self.opts)
+        self.mod_opts = self._prep_mod_opts()
+        self.functions, self.returners = self._load_modules()
+        self.matcher = Matcher(self.opts, self.functions)
+        self.proc_dir = get_proc_dir(opts['cachedir'])
+        self.schedule = salt.utils.schedule.Schedule(
+            self.opts,
+            self.functions,
+            self.returners)
+        self.grains_cache = self.opts['grains']
+
+    def _prep_mod_opts(self):
+        '''
+        Returns a copy of the opts with key bits stripped out
+        '''
+        return super(ProxyMinion, self)._prep_mod_opts()
+
+    def _load_modules(self):
+        '''
+        Return the functions and the returners loaded up from the loader
+        module
+        '''
+        return super(ProxyMinion, self)._load_modules()

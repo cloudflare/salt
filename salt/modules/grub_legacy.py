@@ -11,13 +11,16 @@ import salt.utils
 import salt.utils.decorators as decorators
 from salt.exceptions import CommandExecutionError
 
+# Define the module's virtual name
+__virtualname__ = 'grub'
+
 
 def __virtual__():
     '''
     Only load the module if grub is installed
     '''
     if os.path.exists(_detect_conf()):
-        return 'grub'
+        return __virtualname__
     return False
 
 
@@ -75,8 +78,14 @@ def conf():
                         stanzas.append(stanza)
                     stanza = ''
                     continue
-                if line.startswith('title'):
-                    in_stanza = True
+                if line.strip().startswith('title'):
+                    if in_stanza:
+                        stanza += 'order {0}'.format(pos)
+                        pos += 1
+                        stanzas.append(stanza)
+                        stanza = ''
+                    else:
+                        in_stanza = True
                 if in_stanza:
                     stanza += line
                 if not in_stanza:

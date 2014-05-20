@@ -15,7 +15,7 @@ more difficult to create.
 Salt has been created to get the best of both worlds. States are evaluated in
 a finite order, which guarantees that states are always executed in the same
 order, and the states runtime is declarative, making Salt fully aware of
-dependencies via the requisite system.
+dependencies via the `requisite` system.
 
 State Auto Ordering
 ===================
@@ -33,8 +33,8 @@ executed in, but it is important to note that the requisite system will
 override the ordering defined in the files, and the ``order`` option described
 below will also override the order in which states are defined in sls files.
 
-If the classic ordering is preferred (lexicographic), then set ``state_auto_order``
-to ``False`` in the master configuration file.
+If the classic ordering is preferred (lexicographic), then set
+``state_auto_order`` to ``False`` in the master configuration file.
 
 Requisite Statements
 ====================
@@ -45,10 +45,10 @@ Requisite Statements
     version 0.9.7 of Salt.
 
 Often when setting up states any single action will require or depend on
-another action. Salt allows you to build relationships between states with
-requisite statements. A requisite statement ensure that the named state is
-evaluated before the state requiring it. There are two types of requisite
-statements in Salt, **require** and **watch**.
+another action. Salt allows for the building of relationships between states
+with requisite statements. A requisite statement ensures that the named state
+is evaluated before the state requiring it. There are three types of requisite
+statements in Salt, **require**, **watch** and **prereq**.
 
 These requisite statements are applied to a specific state declaration:
 
@@ -63,7 +63,7 @@ These requisite statements are applied to a specific state declaration:
         - require:
           - pkg: httpd
 
-In this example we use the **require** requisite to declare that the file
+In this example, the **require** requisite is used to declare that the file
 /etc/httpd/conf/httpd.conf should only be set up if the pkg state executes
 successfully.
 
@@ -71,12 +71,38 @@ The requisite system works by finding the states that are required and
 executing them before the state that requires them. Then the required states
 can be evaluated to see if they have executed correctly.
 
+Require statements can refer to the following requisite types: pkg, file, sls
+
+In addition to state declarations such as pkg, file, etc., **sls** type requisites
+are also recognized, and essentially allow 'chaining' of states. This provides a
+mechanism to ensure the proper sequence for complex state formulas, especially when
+the discrete states are split or groups into separate sls files:
+
+.. code-block:: yaml
+
+    include:
+      - network
+
+    httpd:
+      pkg:
+        - installed
+      service:
+        - running
+        - require:
+          - pkg: httpd
+          - sls: network
+
+In this example, the httpd sevice running state will not be applied
+(i.e., the httpd service will not be started) unless both the https package is
+installed AND the network state is satisfied.
+
 .. note:: Requisite matching
 
     Requisites match on both the ID Declaration and the ``name`` parameter.
-    Therefore, if you are using the ``pkgs`` or ``sources`` argument to install
-    a list of packages in a pkg state, it's important to note that you cannot
-    have a requisite that matches on an individual package in the list.
+    Therefore, if using the ``pkgs`` or ``sources`` argument to install
+    a list of packages in a pkg state, it's important to note that it is
+    impossible to match an individual package in the list, since all packages
+    are installed as a single state.
 
 
 Multiple Requisites
@@ -108,7 +134,7 @@ more requisites. Both requisite types can also be separately declared:
       group:
         - present
 
-In this example the httpd service is only going to be started if the package,
+In this example, the httpd service is only going to be started if the package,
 user, group and file are executed successfully.
 
 The Require Requisite
@@ -164,11 +190,23 @@ Perhaps an example can better explain the behavior:
           - file: /etc/redis.conf
           - pkg: redis
 
-In this example the redis service will only be started if the file
+In this example, the redis service will only be started if the file
 /etc/redis.conf is applied, and the file is only applied if the package is
 installed. This is normal require behavior, but if the watched file changes,
 or the watched package is installed or upgraded, then the redis service is
 restarted.
+
+.. note::
+
+    To reiterate:  watch does not alter the original behavior of a function in
+    any way.  The original behavior stays, but additional behavior (defined by
+    mod_watch as explored below) will be run if there are changes in the
+    watched state.  This is why, for example, we have to have a ``cmd.wait``
+    state for watching purposes.  If you examine the source code, you'll see
+    that ``cmd.wait`` is an empty function.  However, you'll notice that
+    ``mod_watch`` is actually just an alias of ``cmd.run``. So if there are
+    changes, we run the command, otherwise, we do nothing.
+
 
 Watch and the mod_watch Function
 --------------------------------
@@ -227,7 +265,7 @@ as if they were under a ``require`` statement.
 Also notice that a ``mod_watch`` may accept additional keyword arguments,
 which, in the sls file, will be taken from the same set of arguments specified
 for the state that includes the ``watch`` requisite. This means, for the
-earlier ``service.running`` example above,  you can tell the service to
+earlier ``service.running`` example above,  the service can be set to
 ``reload`` instead of restart like this:
 
 .. code-block:: yaml
@@ -247,9 +285,10 @@ earlier ``service.running`` example above,  you can tell the service to
 The Order Option
 ================
 
-Before using the order option, remember that the majority of state ordering
+Before using the `order` option, remember that the majority of state ordering
 should be done with a :term:`requisite declaration`, and that a requisite
-declaration will override an order option.
+declaration will override an `order` option, so a state with order option
+should not require or required by other states.
 
 The order option is used by adding an order number to a state declaration
 with the option `order`:
@@ -267,8 +306,8 @@ Any state declared without an order option will be executed after all states
 with order options are executed.
 
 But this construct can only handle ordering states from the beginning.
-Sometimes you may want to send a state to the end of the line. To do this,
-set the order to ``last``:
+Certain circumstances will present a situation where it is desirable to send
+a state to the end of the line. To do this, set the order to ``last``:
 
 .. code-block:: yaml
 
@@ -276,17 +315,3 @@ set the order to ``last``:
       pkg.installed:
         - order: last
 
-Remember that requisite statements override the order option. So the order
-option should be applied to the highest component of the requisite chain:
-
-.. code-block:: yaml
-
-    vim:
-      pkg.installed:
-        - order: last
-        - require:
-          - file: /etc/vimrc
-
-    /etc/vimrc:
-      file.managed:
-        - source: salt://edit/vimrc

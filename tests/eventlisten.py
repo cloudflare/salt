@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 '''
 Use this script to dump the event data out to the terminal. It needs to know
 what the sock_dir is.
@@ -6,6 +8,7 @@ This script is a generic tool to test event output
 '''
 
 # Import Python libs
+from __future__ import print_function
 import optparse
 import pprint
 import time
@@ -42,14 +45,14 @@ def parse():
         if v is not None:
             opts[k] = v
 
+    opts['sock_dir'] = os.path.join(opts['sock_dir'], opts['node'])
+
     if 'minion' in options.node:
         if args:
             opts['id'] = args[0]
             return opts
 
         opts['id'] = options.node
-
-    opts['sock_dir'] = os.path.join(opts['sock_dir'], opts['node'])
 
     return opts
 
@@ -63,7 +66,7 @@ def listen(sock_dir, node, id=None):
             sock_dir,
             id=id
             )
-    print event.puburi
+    print(event.puburi)
     while True:
         ret = event.get_event(full=True)
         if ret is None:

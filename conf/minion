@@ -103,6 +103,10 @@
 # set to zero, the time between reconnection attempts will stay constant.
 #acceptance_wait_time_max: 0
 
+# If the master rejects the minion's public key, retry instead exiting. Rejected keys
+# # will be handled the same as waiting on acceptance.
+#rejected_retry: False
+
 # When the master key changes, the minion will try to re-auth itself to receive
 # the new master key. In larger environments this can cause a SYN flood on the
 # master because all minions try to re-auth immediately. To prevent this and
@@ -110,6 +114,13 @@
 # The wait-time will be a random number of seconds between
 # 0 and the defined value.
 #random_reauth_delay: 60
+
+# When waiting for a master to accept the minion's public key, salt will
+# continuously attempt to reconnect until successful. This is the timeout value,
+# in seconds, for each individual attempt. After this timeout expires, the minion
+# will wait for acceptance_wait_time seconds before trying again.
+# Unless your master is under unusually heavy load, this should be left at the default.
+#auth_timeout: 3
 
 
 # If you don't have any problems with syn-floods, dont bother with the
@@ -181,6 +192,28 @@
 # sane 60 seconds, but if the minion scheduler needs to be evaluated more
 # often lower this value
 #loop_interval: 60
+
+# The grains_refresh_every setting allows for a minion to periodically check
+# its grains to see if they have changed and, if so, to inform the master
+# of the new grains. This operation is moderately expensive, therefore
+# care should be taken not to set this value too low.
+#
+# Note: This value is expressed in __minutes__!
+#
+# A value of 10 minutes is a reasonable default.
+#
+# If the value is set to zero, this check is disabled.
+#grains_refresh_every = 1
+
+# Cache grains on the minion. Default is False.
+# grains_cache: False
+
+# Grains cache expiration, in seconds. If the cache file is older than this
+# number of seconds then the grains cache will be dumped and fully re-populated
+# with fresh data. Defaults to 5 minutes. Will have no effect if 'grains_cache'
+# is not enabled.
+# grains_cache_expiration: 300
+
 
 # When healing, a dns_check is run. This is to make sure that the originally
 # resolved dns has not changed. If this is something that does not happen in
@@ -331,6 +364,16 @@
 #file_roots:
 #  base:
 #    - /srv/salt
+
+# By default, the Salt fileserver recurses fully into all defined environments
+# to attempt to find files. To limit this behavior so that the fileserver only
+# traverses directories with SLS files and special Salt directories like _modules,
+# enable the option below. This might be useful for installations where a file root
+# has a very large number of files and performance is negatively impacted.
+#
+# Default is False.
+#
+# fileserver_limit_traversal: False
 
 # The hash_type is the hash to use when discovering the hash of a file in
 # the local fileserver. The default is md5, but sha1, sha224, sha256, sha384

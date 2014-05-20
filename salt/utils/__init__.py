@@ -6,14 +6,17 @@ from __future__ import absolute_import
 
 # Import python libs
 import copy
+import collections
 import datetime
 import distutils.version  # pylint: disable=E0611
 import fnmatch
 import hashlib
 import imp
 import inspect
+import json
 import logging
 import os
+import pprint
 import random
 import re
 import shlex
@@ -27,8 +30,15 @@ import tempfile
 import time
 import types
 import warnings
+import yaml
 from calendar import month_abbr as months
 
+# Try to load pwd, fallback to getpass if unsuccessful
+try:
+    import pwd
+except ImportError:
+    import getpass
+    pwd = None
 
 try:
     import timelib
@@ -45,10 +55,10 @@ except ImportError:
 
 try:
     import fcntl
-    HAS_FNCTL = True
+    HAS_FCNTL = True
 except ImportError:
     # fcntl is not available on windows
-    HAS_FNCTL = False
+    HAS_FCNTL = False
 
 try:
     import win32api
@@ -62,12 +72,27 @@ except ImportError:
     # Running as purely local
     pass
 
+try:
+    import grp
+    HAS_GRP = True
+except ImportError:
+    # grp is not available on windows
+    HAS_GRP = False
+
+try:
+    import pwd
+    HAS_PWD = True
+except ImportError:
+    # pwd is not available on windows
+    HAS_PWD = False
+
 # Import salt libs
 import salt._compat
 import salt.log
 import salt.minion
 import salt.payload
 import salt.version
+from salt._compat import string_types
 from salt.utils.decorators import memoize as real_memoize
 from salt.exceptions import (
     SaltClientError, CommandNotFoundError, SaltSystemExit, SaltInvocationError
@@ -96,8 +121,8 @@ DEFAULT_COLOR = '\033[00m'
 RED_BOLD = '\033[01;31m'
 ENDC = '\033[0m'
 
-#KWARG_REGEX = re.compile(r'^([^\d\W]\w*)=(.*)$', re.UNICODE) # python 3
-KWARG_REGEX = re.compile(r'^([^\d\W]\w*)=(.*)$')
+#KWARG_REGEX = re.compile(r'^([^\d\W][\w.-]*)=(?!=)(.*)$', re.UNICODE)  # python 3
+KWARG_REGEX = re.compile(r'^([^\d\W][\w.-]*)=(?!=)(.*)$')
 
 log = logging.getLogger(__name__)
 
@@ -174,11 +199,65 @@ def get_colors(use=True):
     if not use:
         for color in colors:
             colors[color] = ''
+    if isinstance(use, str):
+        # Try to set all of the colors to the passed color
+        if use in colors:
+            for color in colors:
+                colors[color] = colors[use]
 
     return colors
 
 
-def daemonize():
+def get_context(template, line, num_lines=5, marker=None):
+    '''
+    Returns debugging context around a line in a given string
+
+    Returns:: string
+    '''
+    template_lines = template.splitlines()
+    num_template_lines = len(template_lines)
+
+    # in test, a single line template would return a crazy line number like,
+    # 357.  do this sanity check and if the given line is obviously wrong, just
+    # return the entire template
+    if line > num_template_lines:
+        return template
+
+    context_start = max(0, line - num_lines - 1)  # subt 1 for 0-based indexing
+    context_end = min(num_template_lines, line + num_lines)
+    error_line_in_context = line - context_start - 1  # subtr 1 for 0-based idx
+
+    buf = []
+    if context_start > 0:
+        buf.append('[...]')
+        error_line_in_context += 1
+
+    buf.extend(template_lines[context_start:context_end])
+
+    if context_end < num_template_lines:
+        buf.append('[...]')
+
+    if marker:
+        buf[error_line_in_context] += marker
+
+    # warning: jinja content may contain unicode strings
+    # instead of utf-8.
+    buf = [i.encode('UTF-8') if isinstance(i, unicode) else i for i in buf]
+
+    return '---\n{0}\n---'.format('\n'.join(buf))
+
+
+def get_user():
+    '''
+    Get the current user
+    '''
+    if pwd is not None:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    else:
+        return getpass.getuser()
+
+
+def daemonize(redirect_out=True):
     '''
     Daemonize a process
     '''
@@ -195,6 +274,7 @@ def daemonize():
 
     # decouple from parent environment
     os.chdir('/')
+    # noinspection PyArgumentList
     os.setsid()
     os.umask(18)
 
@@ -215,10 +295,11 @@ def daemonize():
     # Unfortunately when a python multiprocess is called the output is
     # not cleanly redirected and the parent process dies when the
     # multiprocessing process attempts to access stdout or err.
-    #dev_null = open('/dev/null', 'rw')
-    #os.dup2(dev_null.fileno(), sys.stdin.fileno())
-    #os.dup2(dev_null.fileno(), sys.stdout.fileno())
-    #os.dup2(dev_null.fileno(), sys.stderr.fileno())
+    if redirect_out:
+        dev_null = open('/dev/null', 'r+')
+        os.dup2(dev_null.fileno(), sys.stdin.fileno())
+        os.dup2(dev_null.fileno(), sys.stdout.fileno())
+        os.dup2(dev_null.fileno(), sys.stderr.fileno())
 
 
 def daemonize_if(opts):
@@ -232,7 +313,7 @@ def daemonize_if(opts):
         return
     if sys.platform.startswith('win'):
         return
-    daemonize()
+    daemonize(False)
 
 
 def profile_func(filename=None):
@@ -269,18 +350,60 @@ def which(exe=None):
         # default path based on busybox's default
         default_path = '/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin'
         search_path = os.environ.get('PATH', default_path)
+        path_ext = os.environ.get('PATHEXT', '.EXE')
+        ext_list = path_ext.split(';')
 
-        for path in search_path.split(os.pathsep):
+        @real_memoize
+        def _exe_has_ext():
+            '''
+            Do a case insensitive test if exe has a file extension match in
+            PATHEXT
+            '''
+            for ext in ext_list:
+                try:
+                    pattern = r'.*\.' + ext.lstrip('.') + r'$'
+                    re.match(pattern, exe, re.I).groups()
+                    return True
+                except AttributeError:
+                    continue
+            return False
+
+        search_path = search_path.split(os.pathsep)
+        if not is_windows():
+            # Add any dirs in the default_path which are not in search_path. If
+            # there was no PATH variable found in os.environ, then this will be
+            # a no-op. This ensures that all dirs in the default_path are
+            # searched, which lets salt.utils.which() work well when invoked by
+            # salt-call running from cron (which, depending on platform, may
+            # have a severely limited PATH).
+            search_path.extend(
+                [
+                    x for x in default_path.split(os.pathsep)
+                    if x not in search_path
+                ]
+            )
+        for path in search_path:
             full_path = os.path.join(path, exe)
             if os.access(full_path, os.X_OK):
                 return full_path
+            elif is_windows() and not _exe_has_ext():
+                # On Windows, check for any extensions in PATHEXT.
+                # Allows both 'cmd' and 'cmd.exe' to be matched.
+                for ext in ext_list:
+                    # Windows filesystem is case insensitive so we
+                    # safely rely on that behaviour
+                    if os.access(full_path + ext, os.X_OK):
+                        return full_path + ext
         log.trace(
             '{0!r} could not be found in the following search '
             'path: {1!r}'.format(
                 exe, search_path
             )
         )
-    log.trace('No executable was passed to be searched by which')
+    else:
+        log.error(
+            'No executable was passed to be searched by salt.utils.which()'
+        )
     return None
 
 
@@ -288,7 +411,7 @@ def which_bin(exes):
     '''
     Scan over some possible executables and return the first one that is found
     '''
-    if not isinstance(exes, (list, tuple)):
+    if not isinstance(exes, collections.Iterable):
         return None
     for exe in exes:
         path = which(exe)
@@ -390,6 +513,9 @@ def dns_check(addr, safe=False, ipv6=False):
                     break
             if not addr:
                 error = True
+    except TypeError:
+        err = ('Attempt to resolve address failed. Invalid or unresolveable address')
+        raise SaltSystemExit(code=42, msg=err)
     except socket.error:
         error = True
 
@@ -486,7 +612,7 @@ def jid_load(jid, cachedir, sum_type, serial='msgpack'):
     if not os.path.isfile(load_fn):
         return {}
     serial = salt.payload.Serial(serial)
-    with fopen(load_fn) as fp_:
+    with fopen(load_fn, 'rb') as fp_:
         return serial.load(fp_)
 
 
@@ -494,7 +620,7 @@ def is_jid(jid):
     '''
     Returns True if the passed in value is a job id
     '''
-    if not isinstance(jid, basestring):
+    if not isinstance(jid, string_types):
         return False
     if len(jid) != 20:
         return False
@@ -503,7 +629,6 @@ def is_jid(jid):
         return True
     except ValueError:
         return False
-    return False
 
 
 def check_or_die(command):
@@ -532,15 +657,12 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
         )
     if not os.path.isdir(os.path.dirname(dest)):
         raise IOError(
-            '[Errno 2] No such file or directory: {0}'.format(source)
+            '[Errno 2] No such file or directory: {0}'.format(dest)
         )
     bname = os.path.basename(dest)
     dname = os.path.dirname(os.path.abspath(dest))
     tgt = mkstemp(prefix=bname, dir=dname)
     shutil.copyfile(source, tgt)
-    mask = os.umask(0)
-    os.umask(mask)
-    os.chmod(tgt, 0666 - mask)
     bkroot = ''
     if cachedir:
         bkroot = os.path.join(cachedir, 'file_backup')
@@ -550,7 +672,18 @@ def copyfile(source, dest, backup_mode='', cachedir=''):
     if backup_mode == 'master' or backup_mode == 'both' and bkroot:
         # TODO, backup to master
         pass
+    # Get current file stats to they can be replicated after the new file is
+    # moved to the destination path.
+    fstat = None
+    if not salt.utils.is_windows():
+        try:
+            fstat = os.stat(dest)
+        except OSError:
+            pass
     shutil.move(tgt, dest)
+    if fstat is not None:
+        os.chown(dest, fstat.st_uid, fstat.st_gid)
+        os.chmod(dest, fstat.st_mode)
     # If SELINUX is available run a restorecon on the file
     rcon = which('restorecon')
     if rcon:
@@ -572,7 +705,7 @@ def backup_minion(path, bkroot):
     dname, bname = os.path.split(path)
     fstat = os.stat(path)
     msecs = str(int(time.time() * 1000000))[-6:]
-    stamp = time.asctime().replace(' ', '_')
+    stamp = time.strftime('%a_%b_%d_%H:%M:%S_%Y')
     stamp = '{0}{1}_{2}'.format(stamp[:-4], msecs, stamp[-4:])
     bkpath = os.path.join(bkroot,
                           dname[1:],
@@ -759,7 +892,7 @@ def format_call(fun,
             continue
         extra[key] = copy.deepcopy(value)
 
-    # We'll be showing errors to the users until salt 0.20 comes out, after
+    # We'll be showing errors to the users until Salt Lithium comes out, after
     # which, errors will be raised instead.
     warn_until(
         'Lithium',
@@ -798,7 +931,7 @@ def format_call(fun,
         ret.setdefault('warnings', []).append(
             '{0}. If you were trying to pass additional data to be used '
             'in a template context, please populate \'context\' with '
-            '\'key: value\' pairs. Your approach will work until salt>=0.20.0 '
+            '\'key: value\' pairs. Your approach will work until Salt Lithium '
             'is out.{1}'.format(
                 msg,
                 '' if 'full' not in ret else ' Please update your state files.'
@@ -933,7 +1066,7 @@ def fopen(*args, **kwargs):
     survive into the new program after exec.
     '''
     fhandle = open(*args, **kwargs)
-    if HAS_FNCTL:
+    if HAS_FCNTL:
         # modify the file descriptor on systems with fcntl
         # unix and unix-like systems only
         try:
@@ -941,6 +1074,23 @@ def fopen(*args, **kwargs):
         except AttributeError:
             FD_CLOEXEC = 1                  # pylint: disable=C0103
         old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
+        if 'lock' in kwargs:
+            fcntl.flock(fhandle.fileno(), fcntl.LOCK_SH)
+        fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
+    return fhandle
+
+
+def flopen(*args, **kwargs):
+    fhandle = open(*args, **kwargs)
+    if HAS_FCNTL:
+        # modify the file descriptor on systems with fcntl
+        # unix and unix-like systems only
+        try:
+            FD_CLOEXEC = fcntl.FD_CLOEXEC   # pylint: disable=C0103
+        except AttributeError:
+            FD_CLOEXEC = 1                  # pylint: disable=C0103
+        old_flags = fcntl.fcntl(fhandle.fileno(), fcntl.F_GETFD)
+        fcntl.flock(fhandle.fileno(), fcntl.LOCK_SH)
         fcntl.fcntl(fhandle.fileno(), fcntl.F_SETFD, old_flags | FD_CLOEXEC)
     return fhandle
 
@@ -993,7 +1143,7 @@ def traverse_dict(data, key, default, delim=':'):
     Traverse a dict using a colon-delimited (or otherwise delimited, using
     the "delim" param) target string. The target 'foo:bar:baz' will return
     data['foo']['bar']['baz'] if this value exists, and will otherwise
-    return an empty dict.
+    return the dict in the default argument.
     '''
     try:
         for each in key.split(delim):
@@ -1045,9 +1195,17 @@ def is_windows():
 @real_memoize
 def is_linux():
     '''
-    Simple function to return if a host is Linux or not
+    Simple function to return if a host is Linux or not.
+    Note for a proxy minion, we need to return something else
     '''
-    return sys.platform.startswith('linux')
+    import __main__ as main
+    # This is a hack.  If a proxy minion is started by other
+    # means, e.g. a custom script that creates the minion objects
+    # then this will fail.
+    if 'salt-proxy-minion' in main.__file__:
+        return False
+    else:
+        return sys.platform.startswith('linux')
 
 
 @real_memoize
@@ -1087,7 +1245,7 @@ def check_state_result(running):
         if not isinstance(running[host], dict):
             return False
 
-        if host.find('_|-') == 4:
+        if host.find('_|-') >= 3:
             # This is a single ret, no host associated
             rets = running[host]
         else:
@@ -1145,7 +1303,7 @@ def is_true(value=None):
     # Now check for truthiness
     if isinstance(value, (int, float)):
         return value > 0
-    elif isinstance(value, basestring):
+    elif isinstance(value, string_types):
         return str(value).lower() == 'true'
     else:
         return bool(value)
@@ -1412,16 +1570,16 @@ def date_format(date=None, format="%Y-%m-%d"):
     >>> import datetime
     >>> src = datetime.datetime(2002, 12, 25, 12, 00, 00, 00)
     >>> date_format(src)
-    'Dec 25, 2002'
+    '2002-12-25'
     >>> src = '2002/12/25'
     >>> date_format(src)
-    'Dec 25, 2002'
+    '2002-12-25'
     >>> src = 1040814000
     >>> date_format(src)
-    'Dec 25, 2002'
+    '2002-12-25'
     >>> src = '1040814000'
     >>> date_format(src)
-    'Dec 25, 2002'
+    '2002-12-25'
     '''
     return date_cast(date).strftime(format)
 
@@ -1480,8 +1638,8 @@ def warn_until(version,
         raise RuntimeError(
             'The warning triggered on filename {filename!r}, line number '
             '{lineno}, is supposed to be shown until version '
-            '{until_version!r} is released. Current version is now '
-            '{salt_version!r}. Please remove the warning.'.format(
+            '{until_version} is released. Current version is now '
+            '{salt_version}. Please remove the warning.'.format(
                 filename=caller.filename,
                 lineno=caller.lineno,
                 until_version=version.formatted_version,
@@ -1615,10 +1773,32 @@ def compare_versions(ver1='', oper='==', ver2='', cmp_func=None):
         return cmp_result in cmp_map[oper]
 
 
+def compare_dicts(old=None, new=None):
+    '''
+    Compare before and after results from various salt functions, returning a
+    dict describing the changes that were made.
+    '''
+    ret = {}
+    for key in set((new or {}).keys()).union((old or {}).keys()):
+        if key not in old:
+            # New key
+            ret[key] = {'old': '',
+                        'new': new[key]}
+        elif key not in new:
+            # Key removed
+            ret[key] = {'new': '',
+                        'old': old[key]}
+        elif new[key] != old[key]:
+            # Key modified
+            ret[key] = {'old': old[key],
+                        'new': new[key]}
+    return ret
+
+
 def argspec_report(functions, module=''):
     '''
     Pass in a functions dict as it is returned from the loader and return the
-    argspec function sigs
+    argspec function signatures
     '''
     ret = {}
     # TODO: cp.get_file will also match cp.get_file_str. this is the
@@ -1699,6 +1879,25 @@ def decode_dict(data):
     return rv
 
 
+def find_json(raw):
+    '''
+    Pass in a raw string and load the json when is starts. This allows for a
+    string to start with garbage and end with json but be cleanly loaded
+    '''
+    ret = {}
+    for ind in range(len(raw)):
+        working = '\n'.join(raw.splitlines()[ind:])
+        try:
+            ret = json.loads(working, object_hook=decode_dict)
+        except ValueError:
+            continue
+        if ret:
+            return ret
+    if not ret:
+        # Not json, raise an error
+        raise ValueError
+
+
 def is_bin_file(path):
     '''
     Detects if the file is a binary, returns bool. Returns True if the file is
@@ -1708,7 +1907,7 @@ def is_bin_file(path):
         return None
     try:
         with open(path, 'r') as fp_:
-            return(is_bin_str(fp_.read(2048)))
+            return is_bin_str(fp_.read(2048))
     except os.error:
         return None
 
@@ -1733,3 +1932,121 @@ def is_bin_str(data):
     if len(text) / len(data) > 0.30:
         return True
     return False
+
+
+def repack_dictlist(data):
+    '''
+    Takes a list of one-element dicts (as found in many SLS schemas) and
+    repacks into a single dictionary.
+    '''
+    if isinstance(data, string_types):
+        try:
+            data = yaml.safe_load(data)
+        except yaml.parser.ParserError as err:
+            log.error(err)
+            return {}
+    if not isinstance(data, list) \
+            or [x for x in data
+                if not isinstance(x, (string_types, int, float, dict))]:
+        log.error('Invalid input: {0}'.format(pprint.pformat(data)))
+        log.error('Input must be a list of strings/dicts')
+        return {}
+    ret = {}
+    for element in data:
+        if isinstance(element, (string_types, int, float)):
+            ret[element] = None
+        else:
+            if len(element) != 1:
+                log.error('Invalid input: key/value pairs must contain '
+                          'only one element (data passed: {0}).'
+                          .format(element))
+                return {}
+            ret.update(element)
+    return ret
+
+
+def get_group_list(user=None, include_default=True):
+    '''
+    Returns a list of all of the system group names of which the user
+    is a member.
+    '''
+    if HAS_GRP is False or HAS_PWD is False:
+        # We don't work on platforms that don't have grp and pwd
+        # Just return an empty list
+        return []
+    group_names = None
+    if not isinstance(user, string_types):
+        raise Exception
+    if hasattr(os, 'getgrouplist'):
+        # Try os.getgrouplist, available in python >= 3.3
+        log.trace('Trying os.getgrouplist for {0!r}'.format(user))
+        try:
+            group_names = list(os.getgrouplist(user, pwd.getpwnam(user).pw_gid))
+            log.trace('os.getgrouplist for user {0!r}: {1!r}'.format(user, group_names))
+        except Exception:
+            pass
+    else:
+        # Try pysss.getgrouplist
+        log.trace('Trying pysss.getgrouplist for {0!r}'.format(user))
+        try:
+            import pysss
+            group_names = list(pysss.getgrouplist(user))
+            log.trace('pysss.getgrouplist for user {0!r}: {1!r}'.format(user, group_names))
+        except Exception:
+            pass
+    if group_names is None:
+        # Fall back to generic code
+        # Include the user's default group to behave like
+        # os.getgrouplist() and pysss.getgrouplist() do
+        log.trace('Trying generic group list for {0!r}'.format(user))
+        group_names = [g.gr_name for g in grp.getgrall() if user in g.gr_mem]
+        try:
+            default_group = grp.getgrgid(pwd.getpwnam(user).pw_gid).gr_name
+            if default_group not in group_names:
+                group_names.append(default_group)
+        except KeyError:
+            # If for some reason the user does not have a default group
+            pass
+        log.trace('Generic group list for user {0!r}: {1!r}'.format(user, group_names))
+    if include_default is False:
+        # Historically, saltstack code for getting group lists did not
+        # include the default group. Some things may only want
+        # supplemental groups, so include_default=False omits the users
+        # default group.
+        try:
+            default_group = grp.getgrgid(pwd.getpwnam(user).pw_gid).gr_name
+            group_names.remove(default_group)
+        except KeyError:
+            # If for some reason the user does not have a default group
+            pass
+    return sorted(set(group_names))
+
+
+def get_group_dict(user=None, include_default=True):
+    '''
+    Returns a dict of all of the system groups as keys, and group ids
+    as values, of which the user is a member.
+    E.g: {'staff': 501, 'sudo': 27}
+    '''
+    if HAS_GRP is False or HAS_PWD is False:
+        # We don't work on platforms that don't have grp and pwd
+        # Just return an empty dict
+        return {}
+    group_dict = {}
+    group_names = get_group_list(user, include_default=include_default)
+    for group in group_names:
+        group_dict.update({group: grp.getgrnam(group).gr_gid})
+    return group_dict
+
+
+def get_gid_list(user=None, include_default=True):
+    '''
+    Returns a list of all of the system group IDs of which the user
+    is a member.
+    '''
+    if HAS_GRP is False or HAS_PWD is False:
+        # We don't work on platforms that don't have grp and pwd
+        # Just return an empty list
+        return []
+    gid_list = [gid for (group, gid) in salt.utils.get_group_dict(user, include_default=include_default).items()]
+    return sorted(set(gid_list))

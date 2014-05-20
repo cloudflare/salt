@@ -5,7 +5,6 @@ Manage users with the useradd command
 
 # Import python libs
 try:
-    import grp
     import pwd
 except ImportError:
     pass
@@ -18,13 +17,16 @@ from salt._compat import string_types
 
 log = logging.getLogger(__name__)
 
+# Define the module's virtual name
+__virtualname__ = 'user'
+
 
 def __virtual__():
     '''
     Set the user module if the kernel is SunOS
     '''
 
-    return 'user' if __grains__['kernel'] == 'SunOS' else False
+    return __virtualname__ if __grains__['kernel'] == 'SunOS' else False
 
 
 def _get_gecos(name):
@@ -153,7 +155,7 @@ def delete(name, remove=False, force=False):
     return not ret['retcode']
 
 
-def getent():
+def getent(refresh=False):
     '''
     Return the list of all info for all users
 
@@ -163,7 +165,7 @@ def getent():
 
         salt '*' user.getent
     '''
-    if 'user.getent' in __context__:
+    if 'user.getent' in __context__ and not refresh:
         return __context__['user.getent']
 
     ret = []
@@ -431,20 +433,4 @@ def list_groups(name):
 
         salt '*' user.list_groups foo
     '''
-    ugrp = set()
-    # Add the primary user's group
-    ugrp.add(grp.getgrgid(pwd.getpwnam(name).pw_gid).gr_name)
-
-    # If we already grabbed the group list, it's overkill to grab it again
-    if 'user.getgrall' in __context__:
-        groups = __context__['user.getgrall']
-    else:
-        groups = grp.getgrall()
-        __context__['user.getgrall'] = groups
-
-    # Now, all other groups the user belongs to
-    for group in groups:
-        if name in group.gr_mem:
-            ugrp.add(group.gr_name)
-
-    return sorted(list(ugrp))
+    return salt.utils.get_group_list(name)

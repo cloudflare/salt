@@ -8,12 +8,15 @@ import re
 import salt.utils
 from salt.exceptions import CommandExecutionError
 
+# Define the module's virtual name
+__virtualname__ = 'sysctl'
+
 
 def __virtual__():
     '''
     Only run on NetBSD systems
     '''
-    return 'sysctl' if __grains__['os'] == 'NetBSD' else False
+    return __virtualname__ if __grains__['os'] == 'NetBSD' else False
 
 
 def show():
@@ -42,9 +45,9 @@ def show():
     )
     cmd = 'sysctl -ae'
     ret = {}
-    out = __salt__['cmd.run'](cmd).splitlines()
+    out = __salt__['cmd.run'](cmd, output_loglevel='trace')
     comps = ['']
-    for line in out:
+    for line in out.splitlines():
         if any([line.startswith('{0}.'.format(root)) for root in roots]):
             comps = re.split('[=:]', line, 1)
             ret[comps[0]] = comps[1]

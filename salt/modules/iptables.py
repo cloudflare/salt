@@ -10,6 +10,7 @@ import shlex
 
 # Import salt libs
 import salt.utils
+from salt.state import STATE_INTERNAL_KEYWORDS as _STATE_INTERNAL_KEYWORDS
 from salt.exceptions import SaltException
 
 
@@ -22,21 +23,45 @@ def __virtual__():
     return False
 
 
-def _conf():
+def _iptables_cmd(family='ipv4'):
+    '''
+    Return correct command based on the family, eg. ipv4 or ipv6
+    '''
+    if family == 'ipv6':
+        return salt.utils.which('ip6tables')
+    else:
+        return salt.utils.which('iptables')
+
+
+def _conf(family='ipv4'):
     '''
     Some distros have a specific location for config files
     '''
     if __grains__['os_family'] == 'RedHat':
-        return '/etc/sysconfig/iptables'
+        if family == 'ipv6':
+            return '/etc/sysconfig/ip6tables'
+        else:
+            return '/etc/sysconfig/iptables'
     elif __grains__['os_family'] == 'Arch':
-        return '/etc/iptables/iptables.rules'
+        if family == 'ipv6':
+            return '/etc/iptables/ip6tables.rules'
+        else:
+            return '/etc/iptables/iptables.rules'
+    elif __grains__['os_family'] == 'Debian':
+        if family == 'ipv6':
+            return '/etc/iptables/rules.v4'
+        else:
+            return '/etc/iptables/rules.v6'
     elif __grains__['os'] == 'Gentoo':
-        return '/var/lib/iptables/rules-save'
+        if family == 'ipv6':
+            return '/var/lib/ip6tables/rules-save'
+        else:
+            return '/var/lib/iptables/rules-save'
     else:
         return False
 
 
-def version():
+def version(family='ipv4'):
     '''
     Return version from iptables --version
 
@@ -45,13 +70,16 @@ def version():
     .. code-block:: bash
 
         salt '*' iptables.version
+
+        IPv6:
+        salt '*' iptables.version family=ipv6
     '''
-    cmd = 'iptables --version'
+    cmd = '{0} --version' . format(_iptables_cmd(family))
     out = __salt__['cmd.run'](cmd).split()
     return out[1]
 
 
-def build_rule(table=None, chain=None, command=None, position='', full=None,
+def build_rule(table=None, chain=None, command=None, position='', full=None, family='ipv4',
                **kwargs):
     '''
     Build a well-formatted iptables rule based on kwargs. Long options must be
@@ -72,34 +100,110 @@ def build_rule(table=None, chain=None, command=None, position='', full=None,
 
     .. code-block:: bash
 
-        salt '*' iptables.build_rule match=state connstate=RELATED,ESTABLISHED \\
-            jump=ACCEPT
+        salt '*' iptables.build_rule match=state \\
+            connstate=RELATED,ESTABLISHED jump=ACCEPT
         salt '*' iptables.build_rule filter INPUT command=I position=3 \\
             full=True match=state state=RELATED,ESTABLISHED jump=ACCEPT
+
+        IPv6:
+        salt '*' iptables.build_rule match=state \\
+            connstate=RELATED,ESTABLISHED jump=ACCEPT \\
+            family=ipv6
+        salt '*' iptables.build_rule filter INPUT command=I position=3 \\
+            full=True match=state state=RELATED,ESTABLISHED jump=ACCEPT \\
+            family=ipv6
+
     '''
     if 'target' in kwargs:
         kwargs['jump'] = kwargs['target']
         del kwargs['target']
 
-    for ignore in '__id__', 'fun', 'table', 'chain':
+    for ignore in list(_STATE_INTERNAL_KEYWORDS) + ['chain', 'save', 'table']:
         if ignore in kwargs:
             del kwargs[ignore]
 
     rule = ''
 
+    if 'if' in kwargs:
+        rule += '-i {0} '.format(kwargs['if'])
+        del kwargs['if']
+
+    if 'proto' in kwargs:
+        rule += '-p {0} '.format(kwargs['proto'])
+
     if 'match' in kwargs:
-        rule = '-m {0} '.format(kwargs['match'])
+        kwargs['match'].replace(' ', '')
+        for match in kwargs['match'].split(','):
+            rule += '-m {0} '.format(match)
         del kwargs['match']
 
     if 'state' in kwargs:
         del kwargs['state']
 
     if 'connstate' in kwargs:
-        kwargs['state'] = kwargs['connstate']
+        rule += '--state {0} '.format(kwargs['connstate'])
         del kwargs['connstate']
 
+    if 'proto' in kwargs:
+        rule += '-m {0} '.format(kwargs['proto'])
+        del kwargs['proto']
+
+    if 'dport' in kwargs:
+        rule += '--dport {0} '.format(kwargs['dport'])
+        del kwargs['dport']
+
+    if 'sport' in kwargs:
+        rule += '--sport {0} '.format(kwargs['sport'])
+        del kwargs['sport']
+
+    if 'dports' in kwargs:
+        if not '-m multiport' in rule:
+            rule += '-m multiport '
+        rule += '--dports {0} '.format(kwargs['dports'])
+        del kwargs['dports']
+
+    if 'sports' in kwargs:
+        if not '-m multiport' in rule:
+            rule += '-m multiport '
+        rule += '--sports {0} '.format(kwargs['sports'])
+        del kwargs['sports']
+
+    # Jumps should appear last, except for any arguments that are passed to
+    # jumps, which of course need to follow.
+    after_jump = []
+
+    if 'jump' in kwargs:
+        after_jump.append('--jump {0} '.format(kwargs['jump']))
+        del kwargs['jump']
+
+    if 'j' in kwargs:
+        after_jump.append('-j {0} '.format(kwargs['j']))
+        del kwargs['j']
+
+    if 'to-port' in kwargs:
+        after_jump.append('--to-port {0} '.format(kwargs['to-port']))
+        del kwargs['to-port']
+
+    if 'to-ports' in kwargs:
+        after_jump.append('--to-ports {0} '.format(kwargs['to-ports']))
+        del kwargs['to-ports']
+
+    if 'to-destination' in kwargs:
+        after_jump.append('--to-destination {0} '.format(kwargs['to-destination']))
+        del kwargs['to-destination']
+
+    if 'reject-with' in kwargs:
+        after_jump.append('--reject-with {0} '.format(kwargs['reject-with']))
+        del kwargs['reject-with']
+
     for item in kwargs:
-        rule += '--{0} {1} '.format(item, kwargs[item])
+        if len(item) == 1:
+            rule += '-{0} {1} '.format(item, kwargs[item])
+        else:
+            rule += '--{0} {1} '.format(item, kwargs[item])
+
+    for item in after_jump:
+        rule += item
 
     if full is True:
         if not table:
@@ -114,13 +218,13 @@ def build_rule(table=None, chain=None, command=None, position='', full=None,
         else:
             flag = '--'
 
-        return 'iptables -t {0} {1}{2} {3} {4} {5}'.format(table,
-            flag, command, chain, position, rule)
+        return '{0} -t {1} {2}{3} {4} {5} {6}'.format(_iptables_cmd(family),
+            table, flag, command, chain, position, rule)
 
     return rule
 
 
-def get_saved_rules(conf_file=None):
+def get_saved_rules(conf_file=None, family='ipv4'):
     '''
     Return a data structure of the rules in the conf file
 
@@ -129,11 +233,14 @@ def get_saved_rules(conf_file=None):
     .. code-block:: bash
 
         salt '*' iptables.get_saved_rules
+
+        IPv6:
+        salt '*' iptables.get_saved_rules family=ipv6
     '''
-    return _parse_conf(conf_file)
+    return _parse_conf(conf_file, family)
 
 
-def get_rules():
+def get_rules(family='ipv4'):
     '''
     Return a data structure of the current, in-memory rules
 
@@ -142,11 +249,15 @@ def get_rules():
     .. code-block:: bash
 
         salt '*' iptables.get_rules
+
+        IPv6:
+        salt '*' iptables.get_rules family=ipv6
+
     '''
-    return _parse_conf(in_mem=True)
+    return _parse_conf(in_mem=True, family=family)
 
 
-def get_saved_policy(table='filter', chain=None, conf_file=None):
+def get_saved_policy(table='filter', chain=None, conf_file=None, family='ipv4'):
     '''
     Return the current policy for the specified table/chain
 
@@ -155,16 +266,23 @@ def get_saved_policy(table='filter', chain=None, conf_file=None):
     .. code-block:: bash
 
         salt '*' iptables.get_saved_policy filter INPUT
-        salt '*' iptables.get_saved_policy filter INPUT conf_file=/etc/iptables.saved
+        salt '*' iptables.get_saved_policy filter INPUT \\
+            conf_file=/etc/iptables.saved
+
+        IPv6:
+        salt '*' iptables.get_saved_policy filter INPUT family=ipv6
+        salt '*' iptables.get_saved_policy filter INPUT \\
+            conf_file=/etc/iptables.saved family=ipv6
+
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
 
-    rules = _parse_conf(conf_file)
+    rules = _parse_conf(conf_file, family=family)
     return rules[table][chain]['policy']
 
 
-def get_policy(table='filter', chain=None):
+def get_policy(table='filter', chain=None, family='ipv4'):
     '''
     Return the current policy for the specified table/chain
 
@@ -173,15 +291,18 @@ def get_policy(table='filter', chain=None):
     .. code-block:: bash
 
         salt '*' iptables.get_policy filter INPUT
+
+        IPv6:
+        salt '*' iptables.get_policy filter INPUT family=ipv6
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
 
-    rules = _parse_conf(in_mem=True)
+    rules = _parse_conf(in_mem=True, family=family)
     return rules[table][chain]['policy']
 
 
-def set_policy(table='filter', chain=None, policy=None):
+def set_policy(table='filter', chain=None, policy=None, family='ipv4'):
     '''
     Set the current policy for the specified table/chain
 
@@ -190,18 +311,21 @@ def set_policy(table='filter', chain=None, policy=None):
     .. code-block:: bash
 
         salt '*' iptables.set_policy filter INPUT ACCEPT
+
+        IPv6:
+        salt '*' iptables.set_policy filter INPUT ACCEPT family=ipv6
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
     if not policy:
         return 'Error: Policy needs to be specified'
 
-    cmd = 'iptables -t {0} -P {1} {2}'.format(table, chain, policy)
+    cmd = '{0} -t {1} -P {2} {3}'.format(_iptables_cmd(family), table, chain, policy)
     out = __salt__['cmd.run'](cmd)
     return out
 
 
-def save(filename=None):
+def save(filename=None, family='ipv4'):
     '''
     Save the current in-memory rules to disk
 
@@ -210,6 +334,9 @@ def save(filename=None):
     .. code-block:: bash
 
         salt '*' iptables.save /etc/sysconfig/iptables
+
+        IPv6:
+        salt '*' iptables.save /etc/sysconfig/iptables family=ipv6
     '''
     if _conf() and not filename:
         filename = _conf()
@@ -217,12 +344,12 @@ def save(filename=None):
     parent_dir = os.path.dirname(filename)
     if not os.path.isdir(parent_dir):
         os.makedirs(parent_dir)
-    cmd = 'iptables-save > {0}'.format(filename)
+    cmd = '{0}-save > {1}'.format(_iptables_cmd(family), filename)
     out = __salt__['cmd.run'](cmd)
     return out
 
 
-def check(table='filter', chain=None, rule=None):
+def check(table='filter', chain=None, rule=None, family='ipv4'):
     '''
     Check for the existance of a rule in the table and chain
 
@@ -235,21 +362,124 @@ def check(table='filter', chain=None, rule=None):
 
     .. code-block:: bash
 
-        salt '*' iptables.check filter INPUT rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+        salt '*' iptables.check filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+
+        IPv6:
+        salt '*' iptables.check filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT' \\
+            family=ipv6
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
     if not rule:
         return 'Error: Rule needs to be specified'
 
-    cmd = 'iptables -t {0} -C {1} {2}'.format(table, chain, rule)
-    out = __salt__['cmd.run'](cmd)
+    if __grains__['os_family'] == 'RedHat':
+        cmd = '{0}-save' . format(_iptables_cmd(family))
+        out = __salt__['cmd.run'](cmd).find('-A {1} {2}'.format(
+            table,
+            chain,
+            rule,
+        ))
+        if out != -1:
+            out = ''
+        else:
+            return False
+    else:
+        cmd = '{0} -t {1} -C {2} {3}'.format(_iptables_cmd(family), table, chain, rule)
+        out = __salt__['cmd.run'](cmd)
+
     if not out:
         return True
     return out
 
 
-def append(table='filter', chain=None, rule=None):
+def check_chain(table='filter', chain=None, family='ipv4'):
+    '''
+    .. versionadded:: 2014.1.0 (Hydrogen)
+
+    Check for the existance of a chain in the table
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' iptables.check_chain filter INPUT
+
+        IPv6:
+        salt '*' iptables.check_chain filter INPUT family=ipv6
+    '''
+
+    if not chain:
+        return 'Error: Chain needs to be specified'
+
+    cmd = '{0}-save -t {1}'.format(_iptables_cmd(family), table)
+    out = __salt__['cmd.run'](cmd).find(':{1} '.format(table, chain))
+
+    if out != -1:
+        out = True
+    else:
+        out = False
+
+    return out
+
+
+def new_chain(table='filter', chain=None, family='ipv4'):
+    '''
+    .. versionadded:: 2014.1.0 (Hydrogen)
+
+    Create new custom chain to the specified table.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' iptables.new_chain filter CUSTOM_CHAIN
+
+        IPv6:
+        salt '*' iptables.new_chain filter CUSTOM_CHAIN family=ipv6
+    '''
+
+    if not chain:
+        return 'Error: Chain needs to be specified'
+
+    cmd = '{0} -t {1} -N {2}'.format(_iptables_cmd(family), table, chain)
+    out = __salt__['cmd.run'](cmd)
+
+    if not out:
+        out = True
+    return out
+
+
+def delete_chain(table='filter', chain=None, family='ipv4'):
+    '''
+    .. versionadded:: 2014.1.0 (Hydrogen)
+
+    Delete custom chain to the specified table.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' iptables.delete_chain filter CUSTOM_CHAIN
+
+        IPv6:
+        salt '*' iptables.delete_chain filter CUSTOM_CHAIN family=ipv6
+    '''
+
+    if not chain:
+        return 'Error: Chain needs to be specified'
+
+    cmd = '{0} -t {1} -X {2}'.format(_iptables_cmd(family), table, chain)
+    out = __salt__['cmd.run'](cmd)
+
+    if not out:
+        out = True
+    return out
+
+
+def append(table='filter', chain=None, rule=None, family='ipv4'):
     '''
     Append a rule to the specified table/chain.
 
@@ -262,19 +492,28 @@ def append(table='filter', chain=None, rule=None):
 
     .. code-block:: bash
 
-        salt '*' iptables.append filter INPUT rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+        salt '*' iptables.append filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+
+        IPv6:
+        salt '*' iptables.append filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT' \\
+            family=ipv6
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
     if not rule:
         return 'Error: Rule needs to be specified'
 
-    cmd = 'iptables -t {0} -A {1} {2}'.format(table, chain, rule)
+    cmd = '{0} -t {1} -A {2} {3}'.format(_iptables_cmd(family), table, chain, rule)
     out = __salt__['cmd.run'](cmd)
-    return out
+    if len(out) == 0:
+        return True
+    else:
+        return False
 
 
-def insert(table='filter', chain=None, position=None, rule=None):
+def insert(table='filter', chain=None, position=None, rule=None, family='ipv4'):
     '''
     Insert a rule into the specified table/chain, at the specified position.
 
@@ -287,7 +526,13 @@ def insert(table='filter', chain=None, position=None, rule=None):
 
     .. code-block:: bash
 
-        salt '*' iptables.insert filter INPUT position=3 rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+        salt '*' iptables.insert filter INPUT position=3 \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+
+        IPv6:
+        salt '*' iptables.insert filter INPUT position=3 \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT' \\
+            family=ipv6
     '''
     if not chain:
         return 'Error: Chain needs to be specified'
@@ -296,12 +541,12 @@ def insert(table='filter', chain=None, position=None, rule=None):
     if not rule:
         return 'Error: Rule needs to be specified'
 
-    cmd = 'iptables -t {0} -I {1} {2} {3}'.format(table, chain, position, rule)
+    cmd = '{0} -t {1} -I {2} {3} {4}'.format(_iptables_cmd(family), table, chain, position, rule)
     out = __salt__['cmd.run'](cmd)
     return out
 
 
-def delete(table, chain=None, position=None, rule=None):
+def delete(table, chain=None, position=None, rule=None, family='ipv4'):
     '''
     Delete a rule from the specified table/chain, specifying either the rule
         in its entirety, or the rule's position in the chain.
@@ -316,7 +561,14 @@ def delete(table, chain=None, position=None, rule=None):
     .. code-block:: bash
 
         salt '*' iptables.delete filter INPUT position=3
-        salt '*' iptables.delete filter INPUT rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+        salt '*' iptables.delete filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT'
+
+        IPv6:
+        salt '*' iptables.delete filter INPUT position=3 family=ipv6
+        salt '*' iptables.delete filter INPUT \\
+            rule='-m state --state RELATED,ESTABLISHED -j ACCEPT' \\
+            family=ipv6
     '''
 
     if position and rule:
@@ -325,41 +577,48 @@ def delete(table, chain=None, position=None, rule=None):
     if position:
         rule = position
 
-    cmd = 'iptables -t {0} -D {1} {2}'.format(table, chain, rule)
+    cmd = '{0} -t {1} -D {2} {3}'.format(_iptables_cmd(family), table, chain, rule)
     out = __salt__['cmd.run'](cmd)
     return out
 
 
-def flush(table='filter'):
+def flush(table='filter', chain='', family='ipv4'):
     '''
-    Flush all chains in the specified table.
+    Flush the chain in the specified table, flush all chains in the specified
+    table if not specified chain.
 
     CLI Example:
 
     .. code-block:: bash
 
-        salt '*' iptables.flush filter
+        salt '*' iptables.flush filter INPUT
+
+        IPv6:
+        salt '*' iptables.flush filter INPUT family=ipv6
     '''
 
-    cmd = 'iptables -t {0} -F'.format(table)
+    if chain:
+        cmd = '{0} -t {1} -F {2}'.format(_iptables_cmd(family), table, chain)
+    else:
+        cmd = '{0} -t {1} -F'.format(_iptables_cmd(family), table)
     out = __salt__['cmd.run'](cmd)
     return out
 
 
-def _parse_conf(conf_file=None, in_mem=False):
+def _parse_conf(conf_file=None, in_mem=False, family='ipv4'):
     '''
     If a file is not passed in, and the correct one for this OS is not
     detected, return False
     '''
     if _conf() and not conf_file and not in_mem:
-        conf_file = _conf()
+        conf_file = _conf(family)
 
     rules = ''
     if conf_file:
         with salt.utils.fopen(conf_file, 'r') as ifile:
             rules = ifile.read()
     elif in_mem:
-        cmd = 'iptables-save'
+        cmd = '{0}-save' . format(_iptables_cmd(family))
         rules = __salt__['cmd.run'](cmd)
     else:
         raise SaltException('A file was not found to parse')
@@ -391,6 +650,9 @@ def _parse_conf(conf_file=None, in_mem=False):
                 parsed_args = vars(parser.parse_args(shlex.split(line)))
             ret_args = {}
             chain = parsed_args['append']
+            if not sys.version.startswith('2.6'):
+                if isinstance(chain, list):
+                    chain = chain[0]
             for arg in parsed_args:
                 if parsed_args[arg] and arg is not 'append':
                     ret_args[arg] = parsed_args[arg]
@@ -418,7 +680,10 @@ def _parser():
         add_arg = parser.add_argument
 
     # COMMANDS
-    add_arg('-A', '--append', dest='append', action='append')
+    if sys.version.startswith('2.6'):
+        add_arg('-A', '--append', dest='append', action='append')
+    else:
+        add_arg('-A', '--append', dest='append', action='append', nargs='*')
     add_arg('-D', '--delete', dest='delete', action='append')
     add_arg('-I', '--insert', dest='insert', action='append')
     add_arg('-R', '--replace', dest='replace', action='append')
@@ -432,8 +697,13 @@ def _parser():
 
     # PARAMETERS
     add_arg('-p', '--protocol', dest='protocol', action='append')
-    add_arg('-s', '--source', dest='source', action='append')
-    add_arg('-d', '--destination', dest='destination', action='append')
+    if sys.version.startswith('2.6'):
+        add_arg('-s', '--source', dest='source', action='append')
+        add_arg('-d', '--destination', dest='destination', action='append')
+    else:
+        add_arg('-s', '--source', dest='source', action='append', nargs='*')
+        add_arg('-d', '--destination', dest='destination', action='append',
+                nargs='*')
     add_arg('-j', '--jump', dest='jump', action='append')
     add_arg('-g', '--goto', dest='goto', action='append')
     add_arg('-i', '--in-interface', dest='in-interface', action='append')
@@ -451,9 +721,13 @@ def _parser():
     ## ah
     add_arg('--ahspi', dest='ahspi', action='append')
     ## cluster
-    add_arg('--cluster-total-nodes', dest='cluster-total-nodes', action='append')
+    add_arg('--cluster-total-nodes',
+            dest='cluster-total-nodes',
+            action='append')
     add_arg('--cluster-local-node', dest='cluster-local-node', action='append')
-    add_arg('--cluster-local-nodemask', dest='cluster-local-nodemask', action='append')
+    add_arg('--cluster-local-nodemask',
+            dest='cluster-local-nodemask',
+            action='append')
     add_arg('--cluster-hash-seed', dest='cluster-hash-seed', action='append')
     add_arg('--h-length', dest='h-length', action='append')
     add_arg('--mangle-mac-s', dest='mangle-mac-s', action='append')
@@ -484,7 +758,10 @@ def _parser():
     add_arg('--ctexpire', dest='ctexpire', action='append')
     ## dccp
     add_arg('--sport', '--source-port', dest='source_port', action='append')
-    add_arg('--dport', '--destination-port', dest='destination_port', action='append')
+    add_arg('--dport',
+            '--destination-port',
+            dest='destination_port',
+            action='append')
     add_arg('--dccp-types', dest='dccp-types', action='append')
     add_arg('--dccp-option', dest='dccp-option', action='append')
     ## dscp
@@ -504,10 +781,18 @@ def _parser():
     add_arg('--hashlimit-srcmask', dest='hashlimit-srcmask', action='append')
     add_arg('--hashlimit-dstmask', dest='hashlimit-dstmask', action='append')
     add_arg('--hashlimit-name', dest='hashlimit-name', action='append')
-    add_arg('--hashlimit-htable-size', dest='hashlimit-htable-size', action='append')
-    add_arg('--hashlimit-htable-max', dest='hashlimit-htable-max', action='append')
-    add_arg('--hashlimit-htable-expire', dest='hashlimit-htable-expire', action='append')
-    add_arg('--hashlimit-htable-gcinterval', dest='hashlimit-htable-gcinterval', action='append')
+    add_arg('--hashlimit-htable-size',
+            dest='hashlimit-htable-size',
+            action='append')
+    add_arg('--hashlimit-htable-max',
+            dest='hashlimit-htable-max',
+            action='append')
+    add_arg('--hashlimit-htable-expire',
+            dest='hashlimit-htable-expire',
+            action='append')
+    add_arg('--hashlimit-htable-gcinterval',
+            dest='hashlimit-htable-gcinterval',
+            action='append')
     ## helper
     add_arg('--helper', dest='helper', action='append')
     ## icmp
@@ -524,7 +809,10 @@ def _parser():
     add_arg('--mac-source', dest='mac-source', action='append')
     ## multiport
     add_arg('--sports', '--source-ports', dest='source-ports', action='append')
-    add_arg('--dports', '--destination-ports', dest='destination-ports', action='append')
+    add_arg('--dports',
+            '--destination-ports',
+            dest='destination-ports',
+            action='append')
     add_arg('--ports', dest='ports', action='append')
     ## owner
     add_arg('--uid-owner', dest='uid-owner', action='append')

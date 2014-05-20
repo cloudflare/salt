@@ -17,6 +17,9 @@ __func_alias__ = {
     'set_': 'set'
 }
 
+# Define the module's virtual name
+__virtualname__ = 'debconf'
+
 
 def __virtual__():
     '''
@@ -27,10 +30,9 @@ def __virtual__():
         return False
 
     if salt.utils.which('debconf-get-selections') is None:
-        log.info('Package debconf-utils is not installed.')
         return False
 
-    return 'debconf'
+    return __virtualname__
 
 
 def _unpack_lines(out):
@@ -131,7 +133,7 @@ def set_(package, question, type, value, *extra):
     return True
 
 
-def set_file(path, **kwargs):
+def set_file(path, saltenv='base', **kwargs):
     '''
     Set answers to debconf questions from a file.
 
@@ -141,7 +143,15 @@ def set_file(path, **kwargs):
 
         salt '*' debconf.set_file salt://pathto/pkg.selections
     '''
-    path = __salt__['cp.cache_file'](path, kwargs.get('__env__', 'base'))
+    if '__env__' in kwargs:
+        salt.utils.warn_until(
+            'Boron',
+            'Passing a salt environment should be done using \'saltenv\' not '
+            '\'__env__\'. This functionality will be removed in Salt Boron.'
+        )
+        # Backwards compatibility
+        saltenv = kwargs['__env__']
+    path = __salt__['cp.cache_file'](path, saltenv)
     if path:
         _set_file(path)
         return True

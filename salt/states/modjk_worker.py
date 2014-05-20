@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
 '''
-Send commands to a :strong:`modjk` load balancer via the peer system
+Manage modjk workers
+====================
+
+Send commands to a :strong:`modjk` load balancer via the peer system.
 
 This module can be used with the :doc:`prereq </ref/states/requisites>`
 requisite to remove/add the worker from the load balancer before
-deploying/restarting service
+deploying/restarting service.
 
 Mandatory Settings:
 
 - The minion needs to have permission to publish the :strong:`modjk.*`
-  functions (see :doc:`here </ref/peer>` here for information on configuring
+  functions (see :doc:`here </ref/peer>` for information on configuring
   peer publishing permissions)
 
 - The modjk load balancer must be configured as stated in the :strong:`modjk`

@@ -12,13 +12,16 @@ import plistlib
 # Import salt libs
 import salt.utils.decorators as decorators
 
+# Define the module's virtual name
+__virtualname__ = 'service'
+
 
 def __virtual__():
     '''
     Only work on MacOS
     '''
     if __grains__['os'] == 'MacOS':
-        return 'service'
+        return __virtualname__
     return False
 
 
@@ -44,20 +47,27 @@ def _available_services():
         for root, dirs, files in os.walk(launch_dir):
             for filename in files:
                 file_path = os.path.join(root, filename)
+                # Follow symbolic links of files in _launchd_paths
+                true_path = os.path.realpath(file_path)
+                # ignore broken symlinks
+                if not os.path.exists(true_path):
+                    continue
 
                 try:
                     # This assumes most of the plist files will be already in XML format
-                    plist = plistlib.readPlist(file_path)
+                    with open(file_path):
+                        plist = plistlib.readPlist(true_path)
+
                 except Exception:
                     # If plistlib is unable to read the file we'll need to use
                     # the system provided plutil program to do the conversion
-                    cmd = '/usr/bin/plutil -convert xml1 -o - -- "{0}"'.format(file_path)
+                    cmd = '/usr/bin/plutil -convert xml1 -o - -- "{0}"'.format(true_path)
                     plist_xml = __salt__['cmd.run_all'](cmd)['stdout']
                     plist = plistlib.readPlistFromString(plist_xml)
 
                 available_services[plist.Label.lower()] = {
                     'filename': filename,
-                    'file_path': file_path,
+                    'file_path': true_path,
                     'plist': plist,
                 }
 
@@ -137,6 +147,20 @@ def available(job_label):
         salt '*' service.available com.openssh.sshd
     '''
     return True if _service_by_name(job_label) else False
+
+
+def missing(job_label):
+    '''
+    The inverse of service.available
+    Check that the given service is not available.
+
+    CLI Example:
+
+    .. code-block:: bash
+
+        salt '*' service.missing com.openssh.sshd
+    '''
+    return False if _service_by_name(job_label) else True
 
 
 def status(job_label, runas=None):

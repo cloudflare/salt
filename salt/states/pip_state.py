@@ -30,12 +30,23 @@ from salt.exceptions import CommandExecutionError, CommandNotFoundError
 # Import 3rd-party libs
 try:
     import pip
-    import pip.req
     HAS_PIP = True
 except ImportError:
     HAS_PIP = False
 
+if HAS_PIP is True:
+    try:
+        import pip.req
+    except ImportError:
+        HAS_PIP = False
+        # Remove references to the loaded pip module above so reloading works
+        import sys
+        del pip, sys.modules['pip']
+
 logger = logging.getLogger(__name__)
+
+# Define the module's virtual name
+__virtualname__ = 'pip'
 
 
 def __virtual__():
@@ -43,7 +54,7 @@ def __virtual__():
     Only load if the pip module is available in __salt__
     '''
     if HAS_PIP and 'pip.list' in __salt__:
-        return 'pip'
+        return __virtualname__
     return False
 
 
@@ -104,31 +115,113 @@ def installed(name,
               no_install=False,
               no_download=False,
               install_options=None,
+              global_options=None,
               user=None,
               runas=None,
               no_chown=False,
               cwd=None,
               activate=False,
-              pre_releases=False,
-              __env__='base'):
+              pre_releases=False):
     '''
     Make sure the package is installed
 
     name
-        The name of the python package to install
+        The name of the python package to install. You can also specify version
+        numbers here using the standard operators ``==, >=, <=``. If
+        ``requirements`` is given, this parameter will be ignored.
+
+    Example::
+
+        django:
+          pip.installed:
+            - name: django >= 1.6, <= 1.7
+            - require:
+              - pkg: python-pip
+
+    This will install the latest Django version greater than 1.6 but less
+    than 1.7.
+
     user
         The user under which to run pip
-    pip_bin : None
-        Deprecated, use bin_env
+
     use_wheel : False
         Prefer wheel archives (requires pip>=1.4)
-    env : None
-        Deprecated, use bin_env
+
     bin_env : None
-        the pip executable or virtualenv to use
+        Absolute path to a virtual environment directory or absolute path to
+        a pip executable. The example below assumes a virtual environment
+        has been created at ``/foo/.virtualenvs/bar``.
+
+    Example::
+
+        django:
+          pip.installed:
+            - name: django >= 1.6, <= 1.7
+            - bin_env: /foo/.virtualenvs/bar
+            - require:
+              - pkg: python-pip
+
+    Or
+
+    Example::
+
+        django:
+          pip.installed:
+            - name: django >= 1.6, <= 1.7
+            - bin_env: /foo/.virtualenvs/bar/bin/pip
+            - require:
+              - pkg: python-pip
+
+    .. admonition:: Attention
+
+        The following arguments are deprecated, do not use.
+
+    pip_bin : None
+        Deprecated, use ``bin_env``
+
+    env : None
+        Deprecated, use ``bin_env``
 
     .. versionchanged:: 0.17.0
         ``use_wheel`` option added.
+
+    install_options
+
+        Extra arguments to be supplied to the setup.py install command.
+        If you are using an option with a directory path, be sure to use
+        absolute path.
+
+        Example:
+
+        .. code-block:: yaml
+
+            django:
+              pip.installed:
+                - name: django
+                - install_options:
+                  - --prefix=/blah
+                - require:
+                  - pkg: python-pip
+
+    global_options
+        Extra global options to be supplied to the setup.py call before the
+        install command.
+
+        .. versionadded:: 2014.1.3
+
+    .. admonition:: Attention
+
+        As of Salt 0.17.0 the pip state **needs** an importable pip module.
+        This usually means having the system's pip package installed or running
+        Salt from an active `virtualenv`_.
+
+        The reason for this requirement is because ``pip`` already does a
+        pretty good job parsing it's own requirements. It makes no sense for
+        Salt to do ``pip`` requirements parsing and validation before passing
+        them to the ``pip`` library. It's functionality duplication and it's
+        more error prone.
+
+    .. _`virtualenv`: http://www.virtualenv.org
     '''
     if pip_bin and not bin_env:
         bin_env = pip_bin
@@ -155,14 +248,15 @@ def installed(name,
                'value of repo, {1!r}'.format(
                    name,
                    repo,
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
         name = repo
 
-    if name:
+    from_vcs = False
+
+    if name and not requirements:
         try:
             try:
                 # With pip < 1.2, the __version__ attribute does not exist and
@@ -179,6 +273,7 @@ def installed(name,
                 if name.startswith(supported_vcs):
                     for vcs in supported_vcs:
                         if name.startswith(vcs):
+                            from_vcs = True
                             install_req = pip.req.InstallRequirement.from_line(
                                 name.split('{0}+'.format(vcs))[-1]
                             )
@@ -187,7 +282,7 @@ def installed(name,
                     install_req = pip.req.InstallRequirement.from_line(name)
         except ValueError as exc:
             ret['result'] = False
-            if '=' in name and '==' not in name:
+            if not from_vcs and '=' in name and '==' not in name:
                 ret['comment'] = (
                     'Invalid version specification in package {0}. \'=\' is '
                     'not supported, use \'==\' instead.'.format(name)
@@ -217,10 +312,9 @@ def installed(name,
         msg = ('The \'runas\' argument to pip.installed is deprecated, and '
                'will be removed in Salt {version}. Please use \'user\' '
                'instead.'.format(
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
 
         # "There can only be one"
@@ -314,15 +408,16 @@ def installed(name,
         no_install=no_install,
         no_download=no_download,
         install_options=install_options,
+        global_options=global_options,
         user=user,
         no_chown=no_chown,
         cwd=cwd,
         activate=activate,
         pre_releases=pre_releases,
-        __env__=__env__
+        saltenv=__env__
     )
 
-    if pip_install_call and (pip_install_call['retcode'] == 0):
+    if pip_install_call and (pip_install_call.get('retcode', 1) == 0):
         ret['result'] = True
 
         if requirements or editable:
@@ -358,8 +453,11 @@ def installed(name,
             ret['comment'] = 'Package was successfully installed'
     elif pip_install_call:
         ret['result'] = False
-        error = 'Error: {0} {1}'.format(pip_install_call['stdout'],
-                                        pip_install_call['stderr'])
+        if 'stdout' in pip_install_call:
+            error = 'Error: {0} {1}'.format(pip_install_call['stdout'],
+                                            pip_install_call['stderr'])
+        else:
+            error = 'Error: {0}'.format(pip_install_call['comment'])
 
         if requirements or editable:
             comments = []
@@ -389,8 +487,7 @@ def removed(name,
             timeout=None,
             user=None,
             runas=None,
-            cwd=None,
-            __env__='base'):
+            cwd=None):
     '''
     Make sure that a package is not installed.
 
@@ -408,10 +505,9 @@ def removed(name,
         msg = ('The \'runas\' argument to pip.installed is deprecated, and '
                'will be removed in Salt {version}. Please use \'user\' '
                'instead.'.format(
-                   version=_SaltStackVersion.from_name(
-                       'Hydrogen').formatted_version
+                   version=_SaltStackVersion.from_name('Lithium').formatted_version
                ))
-        salt.utils.warn_until('Hydrogen', msg)
+        salt.utils.warn_until('Lithium', msg)
         ret.setdefault('warnings', []).append(msg)
 
     # "There can only be one"
@@ -448,8 +544,7 @@ def removed(name,
                                  proxy=proxy,
                                  timeout=timeout,
                                  user=user,
-                                 cwd=cwd,
-                                 __env__='base'):
+                                 cwd=cwd):
         ret['result'] = True
         ret['changes'][name] = 'Removed'
         ret['comment'] = 'Package was successfully removed.'

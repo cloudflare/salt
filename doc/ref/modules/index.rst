@@ -1,8 +1,14 @@
-=======
-Modules
-=======
+=================
+Execution Modules
+=================
 
-Salt modules are the functions called by the :command:`salt` command.
+Salt execution modules are the functions called by the :command:`salt` command.
+
+.. note::
+
+    Salt execution modules are different from state modules and cannot be
+    called directly within state files.  You must use the `module` state module
+    to execute execution modules within state runs.
 
 .. seealso:: :ref:`Full list of builtin modules <all-salt.modules>`
 
@@ -158,10 +164,11 @@ This means that the package manager modules can be presented as the ``pkg`` modu
 regardless of what the actual module is named.
 
 The package manager modules are the best example of using the ``__virtual__``
-function:
-:blob:`salt/modules/pacman.py`
-:blob:`salt/modules/yumpkg.py`
-:blob:`salt/modules/apt.py`
+function. Some examples:
+
+- :blob:`pacman.py <salt/modules/pacman.py>`
+- :blob:`yumpkg.py <salt/modules/yumpkg.py>`
+- :blob:`apt.py <salt/modules/apt.py>`
 
 
 Documentation
@@ -259,6 +266,12 @@ Objects NOT Loaded into the Salt Minion
 
     cheese = {} # Not a callable Python object
 
+.. note::
+
+    Some callable names also end with an underscore ``_``, to avoid keyword clashes
+    with Python keywords.  When using Salt modules, or state modules, with these
+    in them the trailing underscore should be omitted.
+
 Useful Decorators for Modules
 =============================
 Sometimes when writing modules for large scale deployments you run into some small
@@ -272,7 +285,7 @@ work on all hosts, but some functions require (for example) a service to be inst
 Instead of trying to wrap much of the code in large try/except blocks you can use
 a simple decorator to do this. If the dependencies passed to the decorator don't
 exist, then the salt minion will remove those functions from the module on that host.
-If a "fallback_funcion" is defined, it will replace the function instead of removing it
+If a "fallback_function" is defined, it will replace the function instead of removing it
 
 .. code-block:: python
 
@@ -296,7 +309,7 @@ If a "fallback_funcion" is defined, it will replace the function instead of remo
         '''
         return '"dependency_that_sometimes_exists" needs to be installed for this function to exist'
 
-    @depends('dependency_that_sometimes_exists', fallback_funcion=_fallback)
+    @depends('dependency_that_sometimes_exists', fallback_function=_fallback)
     def foo():
         '''
         Function with a dependency on the "dependency_that_sometimes_exists" module.

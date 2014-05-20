@@ -5,6 +5,7 @@ used to manage salt keys directly without interfacing with the CLI.
 '''
 
 # Import python libs
+from __future__ import print_function
 import os
 import shutil
 import fnmatch
@@ -35,7 +36,7 @@ class KeyCLI(object):
                 'key',
                 self.opts
             )
-        elif status.startswith('pre') or status.startswith('un'):
+        elif status.startswith(('pre', 'un')):
             salt.output.display_output(
                 {'minions_pre': keys['minions_pre']},
                 'key',
@@ -47,6 +48,8 @@ class KeyCLI(object):
                 'key',
                 self.opts
             )
+        elif status.startswith('all'):
+            self.list_all()
 
     def list_all(self):
         '''

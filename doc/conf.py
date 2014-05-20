@@ -30,8 +30,6 @@ class Mock(object):
     def __getattr__(self, name):
         if name in ('__file__', '__path__'):
             return '/dev/null'
-        elif name[0] == name[0].upper():
-            return type(name, (), {})
         else:
             return Mock()
 # pylint: enable=R0903
@@ -48,7 +46,15 @@ MOCK_MODULES = [
     'yaml',
     'yaml.constructor',
     'yaml.nodes',
+    'yaml.scanner',
     'zmq',
+    # salt.cloud
+    'libcloud',
+    'libcloud.compute',
+    'libcloud.compute.base',
+    'libcloud.compute.deployment',
+    'libcloud.compute.providers',
+    'libcloud.compute.types',
     # modules, renderers, states, returners, et al
     'django',
     'libvirt',
@@ -74,19 +80,27 @@ for mod_name in MOCK_MODULES:
 
 
 # -- Add paths to PYTHONPATH ---------------------------------------------------
+try:
+    docs_basepath = os.path.abspath(os.path.dirname(__file__))
+except NameError:
+    # sphinx-intl and six execute some code which will raise this NameError
+    # assume we're in the doc/ directory
+    docs_basepath = os.path.abspath(os.path.dirname('.'))
 
-docs_basepath = os.path.abspath(os.path.dirname(__file__))
 addtl_paths = (
-        os.pardir, # salt itself (for autodoc)
-        '_ext', # custom Sphinx extensions
+        os.pardir,  # salt itself (for autodoc)
+        '_ext',  # custom Sphinx extensions
 )
 
 for path in addtl_paths:
     sys.path.insert(0, os.path.abspath(os.path.join(docs_basepath, path)))
 
+
+# We're now able to import salt
 import salt.version
 
 
+formulas_dir = os.path.join(os.pardir, docs_basepath, 'formulas')
 on_rtd = os.environ.get('READTHEDOCS', None) == 'True'
 
 # ----- Intersphinx Settings ------------------------------------------------>
@@ -96,14 +110,14 @@ intersphinx_mapping = {
 }
 # <---- Intersphinx Settings -------------------------------------------------
 
-# -- General configuration -----------------------------------------------------
+# -- General Configuration -----------------------------------------------------
 
 project = 'Salt'
 copyright = '2013 SaltStack, Inc.'
 
 version = salt.version.__version__
 #release = '.'.join(map(str, salt.version.__version_info__))
-release = '0.17.0'
+release = '2014.1.4'
 
 language = 'en'
 locale_dirs = [
@@ -115,12 +129,13 @@ templates_path = ['_templates']
 exclude_patterns = ['_build', '_incl/*', 'ref/cli/_includes/*.rst']
 
 extensions = [
-    'saltdocs',
+    'saltdomain', # Must come early
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
     'sphinx.ext.extlinks',
     'sphinx.ext.intersphinx',
     'youtube',
+    'saltautodoc', # Must be AFTER autodoc
 ]
 
 modindex_common_prefix = ['salt.']
@@ -130,7 +145,7 @@ autosummary_generate = True
 # Define a substitution for linking to the latest release tarball
 rst_prolog = """\
 .. |saltrepo| replace:: https://github.com/saltstack/salt
-.. |latest| replace:: https://github.com/downloads/saltstack/salt/salt-%s.tar.gz
+.. |latest| replace:: https://github.com/saltstack/salt/archive/v%s.tar.gz
 """ % salt.version.__version__
 
 # A shortcut for linking to tickets on the GitHub issue tracker
@@ -142,6 +157,10 @@ extlinks = {
 }
 
 
+# ----- Localization -------------------------------------------------------->
+locale_dirs = ['locale/']
+gettext_compact = False
+# <---- Localization ---------------------------------------------------------
 ### HTML options
 if on_rtd:
     html_theme = 'default'
@@ -175,6 +194,8 @@ html_sidebars = {
         'sourcelink.html',
         'searchbox.html',
     ],
+    'ref/formula/all/*': [
+    ],
 }
 
 html_context = {
@@ -190,7 +211,6 @@ html_show_sourcelink = False
 html_show_sphinx = True
 html_show_copyright = True
 #html_use_opensearch = ''
-
 
 ### Latex options
 latex_documents = [
@@ -218,6 +238,7 @@ man_pages = [
     ('ref/cli/salt-syndic', 'salt-syndic', 'salt-syndic Documentation', authors, 1),
     ('ref/cli/salt-run', 'salt-run', 'salt-run Documentation', authors, 1),
     ('ref/cli/salt-ssh', 'salt-ssh', 'salt-ssh Documentation', authors, 1),
+    ('ref/cli/salt-cloud', 'salt-cloud', 'Salt Cloud Command', authors, 1),
 ]
 
 
